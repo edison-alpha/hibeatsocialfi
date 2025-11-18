@@ -1,0 +1,39 @@
+{
+  "somnia-testnet": {
+    "rpcUrl": "https://dream-rpc.somnia.network",
+    "chainId": 50312,
+    "SocialGraph": {
+      "address": "0x6d964993b50182B17206f534dcfcc460fC0CCC69",
+      "startBlock": 0
+    },
+    "UserProfile": {
+      "address": "0x2ddc13A67C024a98b267c9c0740E6579bBbA6298",
+      "startBlock": 0
+    },
+    "PlaylistManager": {
+      "address": "0x3B4123D5c0C8eD1c381D38d66a89817e07D32Df6",
+      "startBlock": 0
+    },
+    "DirectMessages": {
+      "address": "0x4deE5202e34f7AA84504Dd70446d9A25a7921a6E",
+      "startBlock": 0
+    },
+    "SongNFT": {
+      "address": "0xC31388420ff0d045c4477f5Fa6513A17E3638272",
+      "startBlock": 0
+    },
+    "Marketplace": {
+      "address": "0xC34f9FE5C732ce01a2C5a4658f14AA25217e2b70",
+      "startBlock": 0
+    },
+    "TippingSystem": {
+      "address": "0xC5D2C577A027124905e251E5c0925dC8bfD8368B",
+      "startBlock": 0
+    },
+    "AlbumManager": {
+      "address": "0x2ae67AC387A4DE0F2109Bdd18E82a18a1B582dee",
+      "startBlock": 0
+    }
+  }
+}
+

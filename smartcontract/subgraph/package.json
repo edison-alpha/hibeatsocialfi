@@ -1,0 +1,22 @@
+{
+  "name": "hibeats-social-subgraph",
+  "version": "0.0.1",
+  "description": "HiBeats Social Graph Subgraph for Somnia Network",
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "graph deploy hibeats-social-subgraph --node https://api.subgraph.somnia.network/deploy --ipfs https://api.subgraph.somnia.network/ipfs",
+    "create-local": "graph create --node http://localhost:8020/ hibeats-social-subgraph",
+    "remove-local": "graph remove --node http://localhost:8020/ hibeats-social-subgraph",
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 hibeats-social-subgraph"
+  },
+  "dependencies": {
+    "@apollo/client": "^4.0.9",
+    "@graphprotocol/graph-cli": "^0.97.1",
+    "@graphprotocol/graph-ts": "^0.35.1",
+    "graphql": "^16.12.0"
+  },
+  "devDependencies": {
+    "matchstick-as": "^0.6.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "userProfile": "0x6aD6eBc95116A81CB89FCB2676E829b5dabF7536",
+  "albumManager": "0x94892b8E7CC63E0C5E5eE7ce27D4E7588CbAf864",
+  "songNFT": "0xc9Ab73b5f988826943e4f63E89ed0841757CBD6c",
+  "playlistManager": "0x912D6898AD5F9351d3AC86F960279a34a5fD582B",
+  "marketplace": "0xe62Dc8113C77bDA6b13Eebb86f3453C4df5399e2",
+  "tippingSystem": "0xD6CAA4722083afFdBE54949E39C46C164ad1a370",
+  "deployer": "0xA1013A405428f770e3Dfa790380ceeA9BA49bf92",
+  "network": "somniaTestnet",
+  "chainId": 50312,
+  "lastUpdated": "2025-11-17T19:07:56.450Z",
+  "blockNumber": 231334469
+}

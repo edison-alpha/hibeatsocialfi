@@ -1,0 +1,165 @@
+specVersion: 0.0.5
+schema:
+  file: schema.graphql
+dataSources:
+  - kind: ethereum
+    name: UserProfile
+    network: somnia-testnet
+    source:
+      address: "0x6aD6eBc95116A81CB89FCB2676E829b5dabF7536"
+      abi: UserProfile
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - UserProfile
+      abis:
+        - name: UserProfile
+          file: UserProfile\UserProfile.json
+      eventHandlers:
+        - event: ProfileCreated(indexed address,indexed uint256,string)
+          handler: handleProfileCreated
+        - event: ProfileUpdated(indexed address)
+          handler: handleProfileUpdated
+        - event: ArtistVerified(indexed address,uint256)
+          handler: handleArtistVerified
+        - event: ArtistUpgraded(indexed address,uint256)
+          handler: handleArtistUpgraded
+        - event: VerificationRenewed(indexed address,uint256,uint256)
+          handler: handleVerificationRenewed
+        - event: VerificationExpired(indexed address)
+          handler: handleVerificationExpired
+        - event: UsernameChanged(indexed address,string,string)
+          handler: handleUsernameChanged
+      file: UserProfile\UserProfile.wasm
+  - kind: ethereum
+    name: PlaylistManager
+    network: somnia-testnet
+    source:
+      address: "0x912D6898AD5F9351d3AC86F960279a34a5fD582B"
+      abi: PlaylistManager
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Playlist
+        - PlaylistSong
+        - GlobalStats
+      abis:
+        - name: PlaylistManager
+          file: PlaylistManager\PlaylistManager.json
+      eventHandlers:
+        - event: PlaylistCreated(indexed uint256,indexed address,string)
+          handler: handlePlaylistCreated
+        - event: PlaylistUpdated(indexed uint256)
+          handler: handlePlaylistUpdated
+        - event: SongAddedToPlaylist(indexed uint256,indexed uint256)
+          handler: handleSongAddedToPlaylist
+        - event: SongRemovedFromPlaylist(indexed uint256,indexed uint256)
+          handler: handleSongRemovedFromPlaylist
+      file: PlaylistManager\PlaylistManager.wasm
+  - kind: ethereum
+    name: SongNFT
+    network: somnia-testnet
+    source:
+      address: "0xc9Ab73b5f988826943e4f63E89ed0841757CBD6c"
+      abi: SongNFT
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Song
+        - SongTransfer
+        - GlobalStats
+      abis:
+        - name: SongNFT
+          file: SongNFT\SongNFT.json
+      eventHandlers:
+        - event: SongMinted(indexed uint256,indexed address,string,string)
+          handler: handleSongMinted
+        - event: Transfer(indexed address,indexed address,indexed uint256)
+          handler: handleTransfer
+      file: SongNFT\SongNFT.wasm
+  - kind: ethereum
+    name: Marketplace
+    network: somnia-testnet
+    source:
+      address: "0xe62Dc8113C77bDA6b13Eebb86f3453C4df5399e2"
+      abi: Marketplace
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - SongListing
+        - SongSale
+        - MarketplaceStats
+        - GlobalStats
+      abis:
+        - name: Marketplace
+          file: Marketplace\Marketplace.json
+      eventHandlers:
+        - event: ListingCreated(indexed uint256,indexed address,indexed address,uint256,uint256)
+          handler: handleListingCreated
+        - event: ListingSold(indexed uint256,indexed address,uint256)
+          handler: handleListingSold
+        - event: ListingCancelled(indexed uint256)
+          handler: handleListingCancelled
+      file: Marketplace\Marketplace.wasm
+  - kind: ethereum
+    name: TippingSystem
+    network: somnia-testnet
+    source:
+      address: "0xD6CAA4722083afFdBE54949E39C46C164ad1a370"
+      abi: TippingSystem
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Tip
+        - TippingStats
+        - GlobalStats
+      abis:
+        - name: TippingSystem
+          file: TippingSystem\TippingSystem.json
+      eventHandlers:
+        - event: TipSent(indexed uint256,indexed address,indexed address,uint256,address,uint256)
+          handler: handleTipSent
+      file: TippingSystem\TippingSystem.wasm
+  - kind: ethereum
+    name: AlbumManager
+    network: somnia-testnet
+    source:
+      address: "0x94892b8E7CC63E0C5E5eE7ce27D4E7588CbAf864"
+      abi: AlbumManager
+      startBlock: 231334285
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Album
+        - AlbumSong
+        - GlobalStats
+      abis:
+        - name: AlbumManager
+          file: AlbumManager\AlbumManager.json
+      eventHandlers:
+        - event: AlbumCreated(indexed uint256,indexed address,string,uint8)
+          handler: handleAlbumCreated
+        - event: SongAddedToAlbum(indexed uint256,indexed uint256)
+          handler: handleSongAddedToAlbum
+        - event: SongRemovedFromAlbum(indexed uint256,indexed uint256)
+          handler: handleSongRemovedFromAlbum
+        - event: AlbumPublished(indexed uint256,uint256)
+          handler: handleAlbumPublished
+      file: AlbumManager\AlbumManager.wasm

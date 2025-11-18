@@ -1,0 +1,608 @@
+# HiBeats Music NFT Schema with Advanced Analytics
+
+# ============ USER PROFILE ============
+
+type UserProfile @entity(immutable: false) {
+  id: ID!                          # User address
+  beatsId: BigInt!                 # BID - Unique numeric identifier (like Farcaster FID)
+  username: String!
+  displayName: String!
+  bio: String
+  avatarHash: String
+  bannerHash: String               # IPFS hash for banner image
+  location: String                 # User location
+  website: String                  # User website
+  
+  # Social Links
+  instagramHandle: String
+  twitterHandle: String
+  youtubeHandle: String
+  spotifyHandle: String
+  
+  # Status & Verification
+  isVerified: Boolean!
+  isArtist: Boolean!
+  verificationExpiryTime: BigInt   # When verification expires (0 if not verified)
+  reputationScore: BigInt!
+  
+  # Timestamps
+  createdAt: BigInt!
+  updatedAt: BigInt!
+  
+  # Music NFT Relations
+  songs: [Song!]! @derivedFrom(field: "artist")
+  ownedSongs: [Song!]! @derivedFrom(field: "owner")
+  albums: [Album!]! @derivedFrom(field: "artist")
+  playlists: [Playlist!]! @derivedFrom(field: "owner")
+  
+  # Trading Relations
+  songsSold: [SongSale!]! @derivedFrom(field: "seller")
+  songsBought: [SongSale!]! @derivedFrom(field: "buyer")
+  listings: [SongListing!]! @derivedFrom(field: "seller")
+  
+  # Tipping Relations (On-chain only)
+  tipsGiven: [Tip!]! @derivedFrom(field: "tipper")
+  tipsReceived: [Tip!]! @derivedFrom(field: "recipient")
+  
+  # Analytics (NFT & On-chain only)
+  nftStats: UserNFTStats
+  tippingStats: TippingStats
+  
+  # Activity History
+  artistUpgrades: [ArtistUpgradeEvent!]! @derivedFrom(field: "user")
+  verificationHistory: [VerificationEvent!]! @derivedFrom(field: "user")
+  usernameChanges: [UsernameChangeEvent!]! @derivedFrom(field: "user")
+}
+
+# Artist Upgrade Event
+type ArtistUpgradeEvent @entity(immutable: true) {
+  id: ID!                          # tx_hash + log_index
+  user: UserProfile!
+  feePaid: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# Verification Event (verified, renewed, expired)
+type VerificationEvent @entity(immutable: true) {
+  id: ID!                          # tx_hash + log_index
+  user: UserProfile!
+  eventType: String!               # verified, renewed, expired
+  expiryTime: BigInt               # New expiry time (for verified/renewed)
+  feePaid: BigInt                  # Fee paid (for renewed)
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# Username Change Event
+type UsernameChangeEvent @entity(immutable: true) {
+  id: ID!                          # tx_hash + log_index
+  user: UserProfile!
+  oldUsername: String!
+  newUsername: String!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# NOTE: Social features (followerCount, followingCount, postCount, likes, comments) 
+# are handled by Datastream (EAS), not indexed here
+
+# ============ SONG NFT ENTITIES ============
+
+type Song @entity(immutable: false) {
+  id: ID!                          # Token ID
+  tokenId: BigInt!
+  artist: UserProfile!
+  owner: UserProfile!
+  
+  # Metadata
+  title: String!
+  description: String
+  genre: String
+  audioHash: String!               # IPFS hash
+  coverHash: String                # IPFS hash
+  duration: BigInt!
+  
+  # Pricing & Royalty
+  price: BigInt!
+  royaltyPercentage: BigInt!
+  
+  # On-chain Stats Only
+  transferCount: BigInt!
+  
+  # Status
+  isListed: Boolean!
+  createdAt: BigInt!
+  
+  # Relations
+  transfers: [SongTransfer!]! @derivedFrom(field: "song")
+  sales: [SongSale!]! @derivedFrom(field: "song")
+  listings: [SongListing!]! @derivedFrom(field: "song")
+  playlists: [PlaylistSong!]! @derivedFrom(field: "song")
+  albums: [AlbumSong!]! @derivedFrom(field: "song")
+  tips: [Tip!]! @derivedFrom(field: "song")
+  
+  # Analytics (Trading only)
+  dailyStats: [SongDailyStats!]! @derivedFrom(field: "song")
+  
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# NOTE: Play count and like count are tracked in Datastream (playEvents schema)
+# Query those from Datastream service, not from subgraph
+
+type SongTransfer @entity(immutable: true) {
+  id: ID!                          # tx_hash + log_index
+  song: Song!
+  from: UserProfile!
+  to: UserProfile!
+  transferType: String!            # mint, sale, transfer, burn
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ============ ALBUM ENTITIES ============
+
+type Album @entity(immutable: false) {
+  id: ID!                          # Album ID
+  albumId: BigInt!
+  artist: UserProfile!
+  title: String!
+  description: String
+  coverImageHash: String           # IPFS hash
+  albumType: AlbumType!            # SINGLE, EP, ALBUM
+  songCount: BigInt!
+  createdAt: BigInt!
+  releaseDate: BigInt
+  isPublished: Boolean!
+  metadataURI: String
+  songs: [AlbumSong!]! @derivedFrom(field: "album")
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+enum AlbumType {
+  SINGLE
+  EP
+  ALBUM
+}
+
+type AlbumSong @entity(immutable: true) {
+  id: ID!                          # album_id + song_token_id
+  album: Album!
+  song: Song!
+  position: BigInt!
+  addedAt: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ============ PLAYLIST ENTITIES ============
+
+type Playlist @entity(immutable: false) {
+  id: ID!                          # Playlist ID
+  owner: UserProfile!
+  name: String!
+  description: String
+  coverHash: String                # IPFS hash
+  isPublic: Boolean!
+  songCount: BigInt!
+  createdAt: BigInt!
+  updatedAt: BigInt!
+  songs: [PlaylistSong!]! @derivedFrom(field: "playlist")
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type PlaylistSong @entity(immutable: true) {
+  id: ID!                          # playlist_id + song_id
+  playlist: Playlist!
+  song: Song!
+  addedAt: BigInt!
+  addedBy: UserProfile!
+  position: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ============ MARKETPLACE ENTITIES ============
+
+type SongListing @entity(immutable: false) {
+  id: ID!                          # Listing ID
+  song: Song!
+  seller: UserProfile!
+  price: BigInt!
+  isActive: Boolean!
+  listedAt: BigInt!
+  expiresAt: BigInt
+  soldAt: BigInt
+  buyer: UserProfile
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type SongSale @entity(immutable: true) {
+  id: ID!                          # Sale ID
+  song: Song!
+  seller: UserProfile!
+  buyer: UserProfile!
+  price: BigInt!
+  royaltyPaid: BigInt!
+  platformFee: BigInt!
+  sellerProceeds: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type MarketplaceStats @entity(immutable: false) {
+  id: ID!                          # "global"
+  totalListings: BigInt!
+  activeListings: BigInt!
+  totalSales: BigInt!
+  totalVolume: BigInt!             # in wei
+  totalRoyalties: BigInt!
+  totalPlatformFees: BigInt!
+  averageSalePrice: BigInt!
+  lastUpdated: BigInt!
+}
+
+# ============ TIPPING ENTITIES ============
+
+type Tip @entity(immutable: true) {
+  id: ID!                          # Tip ID
+  tipper: UserProfile!
+  recipient: UserProfile!
+  song: Song
+  amount: BigInt!
+  message: String
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type TippingStats @entity(immutable: false) {
+  id: ID!                          # user_address
+  user: UserProfile!
+  totalTipsGiven: BigInt!
+  totalTipsReceived: BigInt!
+  totalAmountGiven: BigInt!
+  totalAmountReceived: BigInt!
+  averageTipGiven: BigInt!
+  averageTipReceived: BigInt!
+  lastUpdated: BigInt!
+}
+
+# ============ ADVANCED NFT ANALYTICS ============
+
+# User NFT Statistics (On-chain & Trading only)
+type UserNFTStats @entity(immutable: false) {
+  id: ID!                          # user_address
+  user: UserProfile!
+  
+  # Collection Stats
+  songsOwned: BigInt!
+  songsCreated: BigInt!
+  albumsCreated: BigInt!
+  playlistsCreated: BigInt!
+  
+  # Trading Stats
+  songsSold: BigInt!
+  songsBought: BigInt!
+  totalSalesVolume: BigInt!        # Total STT from sales
+  totalPurchaseVolume: BigInt!     # Total STT spent
+  totalRoyaltiesEarned: BigInt!
+  
+  # Listing Stats
+  activeListings: BigInt!
+  totalListings: BigInt!
+  averageListingPrice: BigInt!
+  
+  # On-chain Tips
+  totalTipsReceived: BigInt!
+  totalTipAmount: BigInt!
+  
+  # Performance Metrics
+  bestSellingSong: Song
+  highestSalePrice: BigInt!
+  averageSalePrice: BigInt!
+  
+  # Time-based
+  firstMintDate: BigInt!
+  lastActivityDate: BigInt!
+  lastUpdated: BigInt!
+}
+
+# NOTE: Play count, like count, social tips are tracked in Datastream
+
+# Song Daily Statistics (Trading & On-chain only)
+type SongDailyStats @entity(immutable: false) {
+  id: ID!                          # song_id + date (YYYY-MM-DD)
+  song: Song!
+  date: String!
+  
+  # Trading Stats
+  sales: BigInt!
+  volume: BigInt!
+  averagePrice: BigInt!
+  uniqueBuyers: BigInt!
+  uniqueSellers: BigInt!
+  
+  # On-chain Tips
+  tips: BigInt!
+  tipAmount: BigInt!
+  uniqueTippers: BigInt!
+}
+
+# NOTE: Plays, likes, shares are tracked in Datastream
+# Use Datastream service to get engagement metrics
+
+# Genre Statistics (Trading & NFT only)
+type GenreStats @entity(immutable: false) {
+  id: ID!                          # genre name (lowercase)
+  genre: String!
+  
+  # Content
+  totalSongs: BigInt!
+  totalArtists: BigInt!
+  totalAlbums: BigInt!
+  
+  # Trading Stats
+  totalSales: BigInt!
+  totalVolume: BigInt!
+  averagePrice: BigInt!
+  floorPrice: BigInt!
+  
+  # Top performers (by sales)
+  topSong: Song
+  topArtist: UserProfile
+  
+  lastUpdated: BigInt!
+}
+
+# NOTE: Play count and like count per genre are in Datastream
+
+# Artist Performance Metrics (Trading & On-chain only)
+type ArtistStats @entity(immutable: false) {
+  id: ID!                          # artist_address
+  artist: UserProfile!
+  
+  # Content Creation
+  totalSongs: BigInt!
+  totalAlbums: BigInt!
+  totalDuration: BigInt!           # Total music duration in seconds
+  
+  # Revenue (On-chain only)
+  totalSalesRevenue: BigInt!
+  totalRoyalties: BigInt!
+  totalTips: BigInt!               # On-chain tips only
+  totalEarnings: BigInt!           # Sales + Royalties + Tips
+  
+  # Performance
+  averageSongPrice: BigInt!
+  
+  # Rankings (by on-chain metrics)
+  salesRank: BigInt!               # Position in sales leaderboard
+  earningsRank: BigInt!            # Position in earnings leaderboard
+  
+  # Top Content (by sales)
+  topSong: Song
+  topAlbum: Album
+  
+  # Time-based
+  firstReleaseDate: BigInt!
+  lastReleaseDate: BigInt!
+  lastUpdated: BigInt!
+}
+
+# NOTE: Play count, like count, follower count are in Datastream
+# Social tips are also in Datastream (separate from on-chain tips)
+
+# Trending Songs (Trading-based ranking)
+type TrendingSong @entity(immutable: false) {
+  id: ID!                          # song_id + period (daily/weekly/monthly)
+  song: Song!
+  period: String!                  # daily, weekly, monthly, all-time
+  
+  # Trading Metrics
+  sales: BigInt!
+  volume: BigInt!
+  tips: BigInt!                    # On-chain tips only
+  
+  # Score (weighted algorithm based on trading)
+  trendingScore: BigInt!
+  
+  # Ranking
+  rank: BigInt!
+  previousRank: BigInt!
+  rankChange: BigInt!              # Positive = moving up
+  
+  # Time
+  periodStart: BigInt!
+  periodEnd: BigInt!
+  lastUpdated: BigInt!
+}
+
+# NOTE: For play-based and like-based trending, use Datastream analytics
+# This entity tracks trading-based trending only
+
+# Collection Analytics (Trading only)
+type CollectionStats @entity(immutable: false) {
+  id: ID!                          # collection_id + type
+  collectionId: String!
+  collectionType: String!          # album, playlist
+  
+  # Content
+  songCount: BigInt!
+  totalDuration: BigInt!
+  
+  # Trading (for albums)
+  totalSales: BigInt!
+  totalVolume: BigInt!
+  averagePrice: BigInt!
+  uniqueBuyers: BigInt!
+  
+  lastUpdated: BigInt!
+}
+
+# NOTE: Play count, likes, completion rate are tracked in Datastream
+
+# Platform-wide Analytics (On-chain & Trading only)
+type PlatformStats @entity(immutable: false) {
+  id: ID!                          # "global"
+  
+  # Users (from on-chain profiles)
+  totalUsers: BigInt!
+  totalArtists: BigInt!
+  totalVerifiedArtists: BigInt!
+  
+  # Content (NFTs)
+  totalSongs: BigInt!
+  totalAlbums: BigInt!
+  totalPlaylists: BigInt!
+  totalDuration: BigInt!           # Total music duration
+  
+  # Trading Stats
+  totalSales: BigInt!
+  totalVolume: BigInt!
+  totalRoyalties: BigInt!
+  totalPlatformFees: BigInt!
+  averageSalePrice: BigInt!
+  
+  # Marketplace
+  activeListings: BigInt!
+  totalListings: BigInt!
+  
+  # On-chain Tips
+  totalTips: BigInt!
+  totalTipAmount: BigInt!
+  
+  # Performance (24h)
+  sales24h: BigInt!
+  volume24h: BigInt!
+  
+  lastUpdated: BigInt!
+}
+
+# NOTE: Active users, play count, like count, social tips are in Datastream
+# This tracks on-chain and trading metrics only
+
+# Daily Platform Metrics (On-chain & Trading only)
+type DailyPlatformStats @entity(immutable: false) {
+  id: ID!                          # date (YYYY-MM-DD)
+  date: String!
+  
+  # Users (from on-chain activity)
+  newUsers: BigInt!
+  newArtists: BigInt!
+  
+  # Content (NFTs)
+  newSongs: BigInt!
+  newAlbums: BigInt!
+  newPlaylists: BigInt!
+  
+  # Trading Stats
+  sales: BigInt!
+  volume: BigInt!
+  averagePrice: BigInt!
+  uniqueBuyers: BigInt!
+  uniqueSellers: BigInt!
+  
+  # On-chain Tips
+  tips: BigInt!
+  tipAmount: BigInt!
+  
+  # Marketplace
+  newListings: BigInt!
+  cancelledListings: BigInt!
+  
+  # Revenue
+  platformFees: BigInt!
+  royaltiesPaid: BigInt!
+}
+
+# NOTE: Active users, plays, likes, social engagement are in Datastream
+
+# Price History for Songs
+type SongPriceHistory @entity(immutable: true) {
+  id: ID!                          # song_id + timestamp
+  song: Song!
+  price: BigInt!
+  eventType: String!               # listed, sold, price_changed
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# Leaderboards
+type Leaderboard @entity(immutable: false) {
+  id: ID!                          # category + period
+  category: String!                # sales, plays, earnings, tips
+  period: String!                  # daily, weekly, monthly, all-time
+  
+  # Top 10 entries
+  entries: [LeaderboardEntry!]! @derivedFrom(field: "leaderboard")
+  
+  lastUpdated: BigInt!
+}
+
+type LeaderboardEntry @entity(immutable: false) {
+  id: ID!                          # leaderboard_id + rank
+  leaderboard: Leaderboard!
+  rank: BigInt!
+  user: UserProfile
+  song: Song
+  value: BigInt!                   # The metric value
+  change: BigInt!                  # Change from previous period
+}
+
+# ============ WALLET ACTIVITY ============
+
+# Wallet Activity (for WalletSidebar)
+type WalletActivity @entity(immutable: true) {
+  id: ID!                          # tx_hash + log_index
+  user: UserProfile!
+  activityType: String!            # send, receive, mint, sale, listing, tip, transfer
+  
+  # Transaction details
+  from: UserProfile
+  to: UserProfile
+  amount: BigInt
+  token: String                    # Token symbol (STT, etc)
+  
+  # Related entities
+  song: Song
+  listing: SongListing
+  sale: SongSale
+  tip: Tip
+  
+  # Status
+  status: String!                  # success, pending, failed
+  
+  # Metadata
+  description: String              # Human-readable description
+  
+  # Blockchain data
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# Global Stats (Legacy - NFT & On-chain only)
+type GlobalStats @entity(immutable: false) {
+  id: ID!                          # "global"
+  totalUsers: BigInt!              # Users with on-chain profiles
+  totalSongs: BigInt!              # Minted NFTs
+  totalPlaylists: BigInt!          # On-chain playlists
+  totalTips: BigInt!               # On-chain tips only
+  totalSales: BigInt!              # NFT sales
+  lastUpdated: BigInt!
+}
+
+# NOTE: Posts, likes, comments, follows are in Datastream (EAS)
+# This only tracks on-chain NFT and trading data
