@@ -399,6 +399,17 @@ const UserProfile = () => {
               ipfsHash: hash.trim()
             }));
             
+            // ✅ Parse music metadata for quoted post if it's music
+            let quotedMusicMetadata = null;
+            if (post.quotedPost.contentType === 3 && post.quotedPost.mediaHashes) {
+              try {
+                quotedMusicMetadata = JSON.parse(post.quotedPost.mediaHashes);
+                console.log('🎵 [Profile] Parsed quoted music metadata:', quotedMusicMetadata);
+              } catch (e) {
+                console.error('❌ [Profile] Failed to parse quoted music metadata:', e);
+              }
+            }
+            
             quotedPostData = {
               id: post.quotedPost.id.toString(),
               author: post.quotedPost.author,
@@ -409,6 +420,10 @@ const UserProfile = () => {
               comments: post.quotedPost.comments || 0,
               shares: post.quotedPost.reposts || 0,
               attachments: quotedAttachments,
+              // ✅ Add music metadata if exists
+              ...(quotedMusicMetadata && {
+                metadata: quotedMusicMetadata
+              }),
               authorProfile: {
                 username: quotedAuthorProfile?.username || post.quotedPost.author.slice(0, 8),
                 displayName: quotedAuthorProfile?.displayName || post.quotedPost.author.slice(0, 8),
@@ -419,6 +434,17 @@ const UserProfile = () => {
             };
           }
           
+          // ✅ Parse music metadata if contentType is music
+          let musicMetadata = null;
+          if (post.contentType === 3 && post.mediaHashes) {
+            try {
+              musicMetadata = JSON.parse(post.mediaHashes);
+              console.log('🎵 [Profile] Parsed music metadata:', musicMetadata);
+            } catch (e) {
+              console.error('❌ [Profile] Failed to parse music metadata:', e);
+            }
+          }
+
           return {
             id: post.id.toString(),
             author: post.author,
@@ -430,6 +456,10 @@ const UserProfile = () => {
             shares: post.reposts || 0,
             isLiked: post.isLiked || false,
             isReposted: post.isReposted || false,
+            // ✅ Add music metadata if exists
+            ...(musicMetadata && {
+              metadata: musicMetadata
+            }),
             // ✅ Add repost metadata if this is a repost
             ...(isRepostedByProfileUser && {
               isRepost: true,

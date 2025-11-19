@@ -46,6 +46,7 @@ import ArtistUpgradeModal from "./ArtistUpgradeModal";
 import { CONTRACT_ADDRESSES } from "@/lib/web3-config";
 import { somniaDatastreamServiceV3 } from "@/services/somniaDatastreamService.v3";
 import { createPostId, ContentType, type PostDataV3 } from "@/config/somniaDataStreams.v3";
+import { songGenerationLimitService } from "@/services/songGenerationLimitService";
 
 interface CreateSongModalProps {
   isOpen: boolean;
@@ -101,6 +102,14 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
   }>({ sunoConfigured: false, ipfsConfigured: false, checked: false });
   const [isTestingApi, setIsTestingApi] = useState(false);
 
+  // Generation limit tracking
+  const [generationLimit, setGenerationLimit] = useState<{
+    canGenerate: boolean;
+    remaining: number;
+    resetTime: Date | null;
+    totalToday: number;
+  }>({ canGenerate: true, remaining: Infinity, resetTime: null, totalToday: 0 });
+
   // NFT Operations hook
   const { mintSongNFT, isMinting, mintingProgress } = useNFTOperations();
 
@@ -154,6 +163,24 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       checkServices();
     }
   }, [isOpen, serviceStatus.checked]);
+
+  // Check generation limit when modal opens
+  useEffect(() => {
+    if (isOpen && address) {
+      const isArtist = profileData?.isArtist || false;
+      const limit = songGenerationLimitService.checkGenerationLimit(address, isArtist);
+      setGenerationLimit(limit);
+
+      console.log('🎵 Generation limit check:', {
+        address,
+        isArtist,
+        canGenerate: limit.canGenerate,
+        remaining: limit.remaining,
+        totalToday: limit.totalToday,
+        resetTime: limit.resetTime
+      });
+    }
+  }, [isOpen, address, profileData?.isArtist]);
 
   const genres = [
     'Electronic', 'Hip Hop', 'Jazz', 'Ambient', 'Rock', 'Pop',
@@ -502,6 +529,28 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       return;
     }
 
+    // ✅ CHECK: Generation limit untuk user biasa (non-artis)
+    if (!address) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
+
+    const isArtist = profileData?.isArtist || false;
+    const limit = songGenerationLimitService.checkGenerationLimit(address, isArtist);
+
+    if (!limit.canGenerate) {
+      const resetTimeStr = songGenerationLimitService.getTimeUntilReset(limit.resetTime);
+      toast.error('Daily generation limit reached', {
+        description: `You've used all 3 generations today. Limit resets in ${resetTimeStr}. Upgrade to Artist for unlimited generations!`,
+        duration: 6000,
+        action: {
+          label: 'Become Artist',
+          onClick: () => setShowUpgradeModal(true)
+        }
+      });
+      return;
+    }
+
     try {
       setStep('generating');
       setGenerationProgress({ stage: 'Initializing...', percent: 5 });
@@ -788,6 +837,24 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       }
 
       setGeneratedSongs(mintedTracks);
+      
+      // ✅ RECORD: Track generation untuk rate limiting
+      if (address) {
+        const isArtist = profileData?.isArtist || false;
+        songGenerationLimitService.recordGeneration(address, taskId, isArtist);
+        
+        // Update generation limit state
+        const newLimit = songGenerationLimitService.checkGenerationLimit(address, isArtist);
+        setGenerationLimit(newLimit);
+        
+        console.log('✅ Generation recorded:', {
+          address,
+          taskId,
+          isArtist,
+          remaining: newLimit.remaining,
+          totalToday: newLimit.totalToday
+        });
+      }
       
       // ⚡ Backup to Somnia Datastream (permanent, decentralized storage)
       setGenerationProgress({ stage: 'Backing up to blockchain...', percent: 95 });
@@ -1188,6 +1255,99 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
                 )}
               </div>
             )}
+            {/* Generation Limit Indicator */}
+            {!profileData?.isArtist && address && (
+              <div className={`rounded-lg p-4 border transition-all ${
+                generationLimit.remaining === 0 
+                  ? 'bg-destructive/5 border-destructive/20' 
+                  : generationLimit.remaining === 1 
+                  ? 'bg-yellow-500/5 border-yellow-500/20'
+                  : 'bg-muted/50 border-border/50'
+              }`}>
+                <div className="flex items-start gap-3">
+                  <div className={`p-2 rounded-lg shrink-0 ${
+                    generationLimit.remaining === 0 
+                      ? 'bg-destructive/10' 
+                      : generationLimit.remaining === 1 
+                      ? 'bg-yellow-500/10'
+                      : 'bg-primary/10'
+                  }`}>
+                    <Zap className={`w-4 h-4 ${
+                      generationLimit.remaining === 0 
+                        ? 'text-destructive' 
+                        : generationLimit.remaining === 1 
+                        ? 'text-yellow-600'
+                        : 'text-primary'
+                    }`} />
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-foreground">
+                        {generationLimit.remaining === 0 
+                          ? 'Daily Limit Reached' 
+                          : `${generationLimit.remaining} Generation${generationLimit.remaining > 1 ? 's' : ''} Remaining`
+                        }
+                      </span>
+                      {generationLimit.remaining === 0 && generationLimit.resetTime && (
+                        <Badge variant="outline" className="text-xs border-destructive/30 text-destructive shrink-0">
+                          Resets in {songGenerationLimitService.getTimeUntilReset(generationLimit.resetTime)}
+                        </Badge>
+                      )}
+                    </div>
+                    
+                    {/* Progress Bar */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">
+                          {generationLimit.totalToday} of 3 used today
+                        </span>
+                        <span className={`font-medium ${
+                          generationLimit.remaining === 0 
+                            ? 'text-destructive' 
+                            : 'text-muted-foreground'
+                        }`}>
+                          {Math.round((generationLimit.totalToday / 3) * 100)}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full transition-all duration-500 ${
+                            generationLimit.remaining === 0 
+                              ? 'bg-destructive' 
+                              : generationLimit.remaining === 1 
+                              ? 'bg-yellow-500'
+                              : 'bg-primary'
+                          }`}
+                          style={{ width: `${(generationLimit.totalToday / 3) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {generationLimit.remaining === 0 ? (
+                      <div className="flex items-start gap-2 pt-1">
+                        <p className="text-xs text-muted-foreground flex-1">
+                          Upgrade to Artist for unlimited generations and exclusive features
+                        </p>
+                        <Button 
+                          onClick={() => setShowUpgradeModal(true)}
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs gap-1.5 border-primary/30 hover:bg-primary/10 shrink-0"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          Upgrade
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground pt-0.5">
+                        Free tier • Resets daily at midnight
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Description Input */}
             <div className="space-y-2">
               <Label htmlFor="prompt">Describe your song *</Label>
@@ -1336,21 +1496,76 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
             {/* Generate Button */}
             <Button
               onClick={handleGenerate}
-              disabled={!prompt.trim() || prompt.trim().length < 10}
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground gap-2 relative overflow-hidden group"
+              disabled={!prompt.trim() || prompt.trim().length < 10 || !generationLimit.canGenerate}
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground gap-2 relative overflow-hidden group disabled:opacity-50 disabled:cursor-not-allowed"
               size="lg"
             >
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000" />
               <Wand2 className="w-5 h-5 animate-pulse" />
-              Generate Song with AI
+              {generationLimit.canGenerate ? 'Generate Song with AI' : 'Daily Limit Reached'}
               <Badge variant="secondary" className="ml-2 bg-purple-500/20 text-purple-400 border-purple-500/30 px-2 py-0.5 text-xs font-bold">
-                AI POWERED
+                {generationLimit.canGenerate ? 'AI POWERED' : `${generationLimit.remaining}/3`}
               </Badge>
             </Button>
             </TabsContent>
 
             {/* Upload Tab */}
-            <TabsContent value="upload" className="space-y-6 min-h-[500px]">
+            <TabsContent value="upload" className="space-y-6 min-h-[500px] relative">
+              {/* Free Tier Overlay */}
+              {!profileData?.isArtist && (
+                <div className="absolute inset-0 z-10 bg-background/95 backdrop-blur-sm rounded-lg flex items-center justify-center">
+                  <div className="max-w-md mx-auto text-center space-y-4 p-8">
+                    <div className="w-16 h-16 mx-auto bg-primary/10 rounded-full flex items-center justify-center">
+                      <Upload className="w-8 h-8 text-primary" />
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold text-foreground">
+                        Upload Your Music
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Upload and mint your own music as NFTs. This feature is exclusive to Artist accounts.
+                      </p>
+                    </div>
+                    <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+                      <p className="text-xs font-semibold text-foreground">Artist Benefits:</p>
+                      <ul className="text-xs text-muted-foreground space-y-1 text-left">
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                          <span>Upload unlimited music files</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                          <span>Unlimited AI song generations</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                          <span>Mint music as NFTs with royalties</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                          <span>Create albums and playlists</span>
+                        </li>
+                        <li className="flex items-start gap-2">
+                          <CheckCircle className="w-3 h-3 text-primary shrink-0 mt-0.5" />
+                          <span>Verified artist badge</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <Button 
+                      onClick={() => setShowUpgradeModal(true)}
+                      className="w-full gap-2 bg-primary hover:bg-primary/90"
+                      size="lg"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      Upgrade to Artist
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      One-time payment • Lifetime access
+                    </p>
+                  </div>
+                </div>
+              )}
+              
               <div className="space-y-4">
                 {/* Audio File Upload */}
                 <div className="space-y-2">
