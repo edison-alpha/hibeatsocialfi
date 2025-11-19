@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { useNotifications } from '@/hooks/useNotifications';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -394,6 +395,8 @@ const PostCard: React.FC<PostCardProps> = ({
     }
   };
 
+  const { sendLikeNotification } = useNotifications();
+
   const handleLike = async () => {
     if (!post?.id || !smartAccountAddress) return;
     
@@ -446,6 +449,17 @@ const PostCard: React.FC<PostCardProps> = ({
       // Call parent handler (blockchain write happens in background)
       if (onLike) {
         await onLike(post.id);
+      }
+
+      // 🔔 Send notification to post author (only when liking, not unliking)
+      if (!wasLiked && post.author && post.author.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+        try {
+          await sendLikeNotification(post.author, post.id);
+          console.log('✅ Like notification sent to:', post.author);
+        } catch (notifError) {
+          console.warn('⚠️ Failed to send like notification:', notifError);
+          // Don't throw - notification failure shouldn't break the like action
+        }
       }
     } catch (error) {
       console.error('❌ [LIKE] Error:', error);
@@ -1763,6 +1777,8 @@ const PostCard: React.FC<PostCardProps> = ({
               avatarUrl={avatarUrl}
               displayName={displayName}
               autoFocus={true}
+              postAuthor={post?.author}
+              postId={post?.id}
             />
           </div>
         )}

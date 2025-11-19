@@ -1843,6 +1843,8 @@ const PostDetail = () => {
                           placeholder="Reply publicly..."
                           displayName={currentUserProfile?.displayName || userProfile?.name || "You"}
                           autoFocus={false}
+                          postAuthor={post?.author}
+                          postId={post?.id ? String(post.id) : undefined}
                         />
                       </div>
                     </div>

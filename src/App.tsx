@@ -12,6 +12,9 @@ import { RealtimeTransactionProvider } from "@/contexts/RealtimeTransactionConte
 import { AudioProvider } from "@/contexts/AudioContext";
 import { PlayCountProvider } from "@/contexts/PlayCountContext";
 import AudioPlayer from "@/components/AudioPlayer";
+import { useMilestoneJob } from "@/hooks/useMilestoneJob";
+import '@/utils/notificationDebug'; // Load debug helpers
+import '@/utils/notificationDebugger'; // Load notification debugger
 import Index from "./pages/Index";
 import Feed from "./pages/Feed";
 import Explore from "./pages/Explore";
@@ -57,6 +60,9 @@ const AppContent = () => {
     setShowProfileCreation,
     checkingProfile
   } = useAuth();
+
+  // 🔔 Start milestone detection background job
+  useMilestoneJob(isAuthenticated);
 
   const handleProfileSave = (profileData: any) => {
     updateProfile(profileData);

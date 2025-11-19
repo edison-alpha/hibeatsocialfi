@@ -1135,6 +1135,23 @@ const Feed = () => {
       // ⚡ Write to blockchain using V3 service (immediate)
       await somniaDatastreamServiceV3.createInteraction(interactionData, true);
       
+      // 🔔 Send notification to post author
+      const post = posts.find(p => p.id === postId);
+      if (post && post.author && post.author.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+        try {
+          const { notificationService } = await import('@/services/notificationService');
+          await notificationService.notifyComment(
+            smartAccountAddress,
+            post.author,
+            postId,
+            commentText.trim()
+          );
+          console.log('✅ Comment notification sent to:', post.author);
+        } catch (notifError) {
+          console.warn('⚠️ Failed to send comment notification:', notifError);
+        }
+      }
+      
       // Silent success - no toast for clean UX
       // Reload feed after blockchain confirmation
       setTimeout(() => {
@@ -1239,6 +1256,21 @@ const Feed = () => {
 
           // ⚡ Write to blockchain using V3 service (immediate)
           const txHash = await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+          
+          // 🔔 Send repost notification (only when reposting, not unreposting)
+          if (!isReposted && post.author && post.author.toLowerCase() !== smartAccountAddress.toLowerCase()) {
+            try {
+              const { notificationService } = await import('@/services/notificationService');
+              await notificationService.notifyRepost(
+                smartAccountAddress,
+                post.author,
+                postId
+              );
+              console.log('✅ Repost notification sent to:', post.author);
+            } catch (notifError) {
+              console.warn('⚠️ Failed to send repost notification:', notifError);
+            }
+          }
           
           // Silent success - no toast for clean UX
           // Reload feed after blockchain confirmation

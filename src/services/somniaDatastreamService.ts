@@ -792,6 +792,37 @@ class SomniaDatastreamService {
                 };
               }
               
+              // ✅ Notifications schema (8 fields: timestamp, notificationType, fromUser, toUser, postId, content, metadata, isRead)
+              if (schemaId === 'hibeats_notifications_v1') {
+                const getValue = (item: any) => {
+                  if (!item) return '';
+                  if (item.value?.value !== undefined) return item.value.value;
+                  if (item.value !== undefined) return item.value;
+                  return item;
+                };
+                
+                const timestamp = Number(getValue(row[0]));
+                const notificationType = String(getValue(row[1]) || '');
+                const fromUser = String(getValue(row[2]) || '');
+                const toUser = String(getValue(row[3]) || '');
+                const postId = String(getValue(row[4]) || '');
+                const content = String(getValue(row[5]) || '');
+                const metadata = String(getValue(row[6]) || '');
+                const isRead = Boolean(getValue(row[7]));
+                
+                return {
+                  id: `notif_${timestamp}_${fromUser}_${toUser}`,
+                  timestamp,
+                  notificationType,
+                  fromUser,
+                  toUser,
+                  postId,
+                  content,
+                  metadata,
+                  isRead,
+                };
+              }
+              
               // Fallback for other schemas (old format)
               const timestamp = Number(row[0]?.value?.value || row[0]?.value || row[0]);
               const content = String(row[1]?.value?.value || row[1]?.value || row[1] || '');
@@ -960,8 +991,8 @@ class SomniaDatastreamService {
               length: publisherData.length,
               firstItemType: publisherData[0] ? typeof publisherData[0] : 'undefined',
               firstItemIsArray: Array.isArray(publisherData[0]),
-              firstItemHasData: publisherData[0] ? 'data' in publisherData[0] : false,
-              firstItemKeys: publisherData[0] && typeof publisherData[0] === 'object' ? Object.keys(publisherData[0]) : [],
+              firstItemHasData: publisherData[0] && typeof publisherData[0] === 'object' ? 'data' in publisherData[0] : false,
+              firstItemKeys: publisherData[0] && typeof publisherData[0] === 'object' && !Array.isArray(publisherData[0]) && typeof publisherData[0] !== 'string' ? Object.keys(publisherData[0] as Record<string, any>) : [],
               sample: publisherData[0]
             });
             
@@ -1197,6 +1228,9 @@ class SomniaDatastreamService {
       
       // Music Events
       'hibeats_music_events_v1': 'uint64 timestamp, string eventType, string tokenId, address artist',
+      
+      // Notifications - Real-time notification system
+      'hibeats_notifications_v1': 'uint256 timestamp, string notificationType, string fromUser, string toUser, string postId, string content, string metadata, bool isRead',
     };
 
     return schemas[schemaId] || null;
@@ -1309,6 +1343,18 @@ class SomniaDatastreamService {
           { name: 'artist', value: data.artist, type: 'address' },
         ]);
 
+      case 'hibeats_notifications_v1':
+        return encoder.encodeData([
+          { name: 'timestamp', value: data.timestamp || timestamp, type: 'uint256' },
+          { name: 'notificationType', value: data.notificationType, type: 'string' },
+          { name: 'fromUser', value: data.fromUser, type: 'string' },
+          { name: 'toUser', value: data.toUser, type: 'string' },
+          { name: 'postId', value: data.postId || '', type: 'string' },
+          { name: 'content', value: data.content || '', type: 'string' },
+          { name: 'metadata', value: data.metadata || '{}', type: 'string' },
+          { name: 'isRead', value: data.isRead || false, type: 'bool' },
+        ]);
+
       default:
         throw new Error(`Unknown schema: ${schemaId}`);
     }
@@ -1409,6 +1455,114 @@ class SomniaDatastreamService {
 
     const schemaData = this.schemaCache.get(schemaId);
     return Array.from(schemaData!.values());
+  }
+
+  // ✅ Subscribe to real-time schema updates via WebSocket
+  async subscribeToSchemaUpdates(
+    schemaId: string,
+    publisherAddress: string,
+    callback: (data: any) => void
+  ): Promise<(() => void) | null> {
+    try {
+      console.log(`🔌 [DATASTREAM] Setting up WebSocket subscription for schema: ${schemaId}`);
+      
+      if (!this.sdk) {
+        console.error('❌ [DATASTREAM] SDK not initialized');
+        return null;
+      }
+
+      // Create WebSocket client for real-time updates
+      const wsClient = createPublicClient({
+        chain: somniaTestnet,
+        transport: webSocket(this.config.wsUrl, {
+          reconnect: true,
+          retryCount: 5,
+          retryDelay: 1000,
+        }),
+      });
+
+      // Convert schema ID to event ID (keccak256 hash)
+      const eventId = keccak256(toBytes(schemaId));
+      
+      console.log(`📡 [DATASTREAM] Watching for events:`, {
+        schemaId,
+        eventId,
+        publisherAddress: publisherAddress.slice(0, 10) + '...'
+      });
+
+      // Watch for DataStreamEvent emissions
+      // Get DataStream contract address from SDK
+      // The SDK should have a method to get the contract address
+      // For now, we'll use a known DataStream contract address for Somnia Devnet
+      const datastreamContractAddress = '0x0000000000000000000000000000000000000817' as `0x${string}`;
+      
+      console.log(`📡 [DATASTREAM] Using contract address: ${datastreamContractAddress}`);
+      
+      const unwatch = wsClient.watchContractEvent({
+        address: datastreamContractAddress,
+        abi: [
+          {
+            type: 'event',
+            name: 'DataStreamEvent',
+            inputs: [
+              { name: 'id', type: 'bytes32', indexed: true },
+              { name: 'argumentTopics', type: 'bytes32[]', indexed: false },
+              { name: 'data', type: 'bytes', indexed: false },
+            ],
+          },
+        ],
+        eventName: 'DataStreamEvent',
+        args: {
+          id: eventId,
+        },
+        onLogs: (logs) => {
+          logs.forEach((log: any) => {
+            try {
+              console.log('🔔 [DATASTREAM] Event received:', log);
+              
+              // Decode event data
+              const eventData = log.args.data;
+              const decoder = new SchemaEncoder(this.getSchemaDefinition(schemaId));
+              const decodedData = decoder.decodeData(eventData);
+              
+              console.log('📦 [DATASTREAM] Decoded data:', decodedData);
+              
+              // Call callback with decoded data
+              callback(decodedData);
+            } catch (error) {
+              console.error('❌ [DATASTREAM] Failed to decode event:', error);
+            }
+          });
+        },
+        onError: (error) => {
+          console.error('❌ [DATASTREAM] WebSocket error:', error);
+        },
+      });
+
+      console.log(`✅ [DATASTREAM] WebSocket subscription active for ${schemaId}`);
+      
+      // Return unsubscribe function
+      return () => {
+        console.log(`🔌 [DATASTREAM] Unsubscribing from ${schemaId}`);
+        unwatch();
+      };
+    } catch (error) {
+      console.error('❌ [DATASTREAM] Failed to setup WebSocket subscription:', error);
+      return null;
+    }
+  }
+
+  // Helper to get schema definition by ID
+  private getSchemaDefinition(schemaId: string): string {
+    const schemas: Record<string, string> = {
+      'hibeats_posts_v1': 'string id, address author, string content, string metadata, uint256 timestamp, uint256 blockNumber, string transactionHash, uint256 likes, uint256 comments, uint256 shares, bool isRepost, string originalPostId, string genre, string ipfsHash',
+      'hibeats_interactions_v1': 'string id, string type, string postId, address fromUser, address toUser, string content, string amount, uint256 timestamp, uint256 blockNumber, string transactionHash, string parentCommentId',
+      'hibeats_music_events_v1': 'string id, string type, string tokenId, address artist, address listener, string amount, string songTitle, string genre, uint256 duration, string ipfsAudioHash, string ipfsImageHash, string taskId, uint256 timestamp, uint256 blockNumber, string transactionHash',
+      'hibeats_user_profiles_v1': 'string id, address userAddress, string username, string displayName, string bio, string avatarHash, string bannerHash, string location, string website, bool isArtist, bool isVerified, uint256 followerCount, uint256 followingCount, uint256 postCount, uint256 createdAt, uint256 updatedAt',
+      'hibeats_notifications_v1': 'string id, uint256 timestamp, string notificationType, address fromUser, address toUser, string postId, string content, string metadata, bool isRead',
+    };
+    
+    return schemas[schemaId] || '';
   }
 }
 

@@ -102,18 +102,8 @@ export const GET_USER_PROFILE = gql`
       avatarHash
       isVerified
       isArtist
-      followerCount
-      followingCount
-      postCount
       createdAt
       updatedAt
-      posts(first: 10, orderBy: timestamp, orderDirection: desc) {
-        id
-        content
-        timestamp
-        likes
-        comments
-      }
     }
   }
 `;
@@ -133,8 +123,6 @@ export const GET_ALL_USERS = gql`
       avatarHash
       isVerified
       isArtist
-      followerCount
-      postCount
       createdAt
     }
   }
@@ -151,7 +139,7 @@ export const SEARCH_USERS = gql`
         ]
       }
       first: $first
-      orderBy: followerCount
+      orderBy: createdAt
       orderDirection: desc
     ) {
       id
@@ -160,8 +148,6 @@ export const SEARCH_USERS = gql`
       avatarHash
       isVerified
       isArtist
-      followerCount
-      postCount
     }
   }
 `;

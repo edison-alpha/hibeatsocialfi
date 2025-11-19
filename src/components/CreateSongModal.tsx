@@ -47,6 +47,7 @@ import { CONTRACT_ADDRESSES } from "@/lib/web3-config";
 import { somniaDatastreamServiceV3 } from "@/services/somniaDatastreamService.v3";
 import { createPostId, ContentType, type PostDataV3 } from "@/config/somniaDataStreams.v3";
 import { songGenerationLimitService } from "@/services/songGenerationLimitService";
+import type { IPFSMetadata } from "@/types/music";
 
 interface CreateSongModalProps {
   isOpen: boolean;
@@ -300,6 +301,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       }
       
       toast.dismiss('upload');
+      
       toast.loading('Creating NFT metadata...', { id: 'metadata' });
       
       // Create comprehensive NFT metadata following OpenSea and Spotify standards
@@ -309,7 +311,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       const formattedAudioHash = `ipfs://${audioHash}`;
       const formattedCoverHash = `ipfs://${coverHash}`;
       
-      const metadata = {
+      const metadata: IPFSMetadata = {
         name: uploadTitle,
         description: uploadDescription || `${uploadTitle} by ${uploadArtist}${uploadFeaturing ? ` (feat. ${uploadFeaturing})` : ''}\n\n${uploadAlbum ? `Album: ${uploadAlbum}\n` : ''}Genre: ${uploadGenre}\nDuration: ${Math.floor(uploadDuration / 60)}:${(uploadDuration % 60).toString().padStart(2, '0')}${uploadProducer ? `\nProduced by: ${uploadProducer}` : ''}${uploadBPM ? `\nBPM: ${uploadBPM}` : ''}${uploadLanguage ? `\nLanguage: ${uploadLanguage}` : ''}\n\nMinted on HiBeats - Web3 Music Platform\nPowered by Somnia Blockchain`,
         image: formattedCoverHash,
@@ -320,9 +322,8 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
         artist: uploadArtist,
         title: uploadTitle,
         album: uploadAlbum || 'Single',
-        genre: uploadGenre,
+        genre: [uploadGenre], // ✅ Fix: genre should be array
         duration: uploadDuration,
-        duration_formatted: `${Math.floor(uploadDuration / 60)}:${(uploadDuration % 60).toString().padStart(2, '0')}`,
         release_date: currentDate,
         language: uploadLanguage || 'Unknown',
         lyrics: uploadLyrics || '',
@@ -389,7 +390,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
           ...(uploadBPM ? [{
             trait_type: 'BPM',
             value: parseInt(uploadBPM),
-            display_type: 'number'
+            display_type: 'number' as const
           }] : []),
           {
             trait_type: 'Explicit Content',
@@ -419,13 +420,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
         
         // Royalty info
         seller_fee_basis_points: 500, // 5%
-        fee_recipient: address,
-        
-        // Additional metadata for music platforms
-        has_lyrics: !!uploadLyrics,
-        has_cover_art: !!uploadedCoverFile,
-        quality: 'High',
-        file_type: uploadedAudioFile.type
+        fee_recipient: address
       };
       
       console.log('📝 NFT Metadata created:', metadata);
@@ -854,6 +849,21 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
           remaining: newLimit.remaining,
           totalToday: newLimit.totalToday
         });
+
+        // 🔔 Send music generated notification
+        if (mintedTracks.length > 0) {
+          try {
+            const { notificationService } = await import('@/services/notificationService');
+            await notificationService.notifyMusicGenerated(
+              address,
+              taskId,
+              mintedTracks[0].title
+            );
+            console.log('✅ Music generated notification sent');
+          } catch (notifError) {
+            console.warn('⚠️ Failed to send music generated notification:', notifError);
+          }
+        }
       }
       
       // ⚡ Backup to Somnia Datastream (permanent, decentralized storage)

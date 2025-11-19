@@ -953,6 +953,18 @@ const UserProfile = () => {
       } else {
         await followUser(profileData.userAddress);
         console.log('✅ Successfully followed user');
+        
+        // 🔔 Send follow notification
+        try {
+          const { notificationService } = await import('@/services/notificationService');
+          await notificationService.notifyFollow(
+            smartAccountAddress,
+            profileData.userAddress
+          );
+          console.log('✅ Follow notification sent to:', profileData.userAddress);
+        } catch (notifError) {
+          console.warn('⚠️ Failed to send follow notification:', notifError);
+        }
       }
     } catch (error) {
       console.error('❌ Error following/unfollowing:', error);

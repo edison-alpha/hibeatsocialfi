@@ -75,6 +75,22 @@ export default function TipModal({
         },
       });
 
+      // 🔔 Send tip notification
+      if (smartAccountAddress && recipientAddress && smartAccountAddress.toLowerCase() !== recipientAddress.toLowerCase()) {
+        try {
+          const { notificationService } = await import('@/services/notificationService');
+          await notificationService.notifyTip(
+            smartAccountAddress,
+            recipientAddress,
+            '', // postId - empty for direct tip
+            `${amount} STT`
+          );
+          console.log('✅ Tip notification sent to:', recipientAddress);
+        } catch (notifError) {
+          console.warn('⚠️ Failed to send tip notification:', notifError);
+        }
+      }
+
       onTipSent?.();
       onClose();
     } catch (error: any) {

@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
 import {
   Image,
   Video,
@@ -83,6 +84,7 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
       setIsLoadingUsers(true);
       try {
         console.log('🔍 [MENTION] Fetching users from Subgraph + DataStream...');
+        console.log('🔍 [MENTION] isConnected:', isConnected);
         
         // Strategy 1: Fetch from Subgraph (primary source - indexed and fast)
         let subgraphUsers: any[] = [];
@@ -90,16 +92,19 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
           const { apolloClient } = await import('@/lib/apollo-client');
           const { GET_ALL_USERS } = await import('@/graphql/queries');
 
+          console.log('📡 [MENTION] Querying Subgraph...');
           const result = await apolloClient.query({
             query: GET_ALL_USERS,
             variables: {
               first: 100,
               skip: 0,
-              orderBy: 'followerCount',
+              orderBy: 'createdAt',
               orderDirection: 'desc'
             },
             fetchPolicy: 'network-only'
           });
+
+          console.log('📡 [MENTION] Subgraph result:', result);
 
           if ((result.data as any)?.userProfiles && (result.data as any).userProfiles.length > 0) {
             subgraphUsers = (result.data as any).userProfiles
@@ -111,14 +116,15 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
                 isArtist: p.isArtist || false,
                 isVerified: p.isVerified || false,
                 userAddress: p.id,
-                followerCount: p.followerCount || 0,
                 source: 'subgraph'
               }));
             
             console.log(`✅ [MENTION] Loaded ${subgraphUsers.length} users from Subgraph`);
+          } else {
+            console.log('📭 [MENTION] No users in Subgraph result');
           }
         } catch (error) {
-          console.warn('⚠️ [MENTION] Subgraph fetch failed:', error);
+          console.error('❌ [MENTION] Subgraph fetch failed:', error);
         }
 
         // Strategy 2: Fetch from DataStream (real-time source - for latest updates)
@@ -172,14 +178,11 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
 
         const mergedUsers = Array.from(userMap.values())
           .sort((a, b) => {
-            // Sort by: verified > artist > followerCount > username
+            // Sort by: verified > artist > username
             if (a.isVerified && !b.isVerified) return -1;
             if (!a.isVerified && b.isVerified) return 1;
             if (a.isArtist && !b.isArtist) return -1;
             if (!a.isArtist && b.isArtist) return 1;
-            if (a.followerCount && b.followerCount) {
-              return b.followerCount - a.followerCount;
-            }
             return a.username.localeCompare(b.username);
           })
           .slice(0, 100); // Limit to 100 users
@@ -196,15 +199,19 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
             isArtist: u.isArtist,
             isVerified: u.isVerified
           })));
+        } else {
+          console.warn('⚠️ [MENTION] No users loaded! Check Subgraph and DataStream');
         }
       } catch (error) {
         console.error('❌ [MENTION] Failed to fetch users:', error);
+        console.error('Error details:', error);
         setAllUsers([]);
       } finally {
         setIsLoadingUsers(false);
       }
     };
 
+    // Fetch immediately
     fetchUsers();
     
     // Refresh user list every 10 seconds for real-time updates
@@ -887,31 +894,28 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
                       onClick={() => selectMention(user.username)}
                       onMouseEnter={() => setSelectedMentionIndex(index)}
                     >
-                      <Avatar className="w-8 h-8">
-                        {user.avatar && (
-                          <AvatarImage 
-                            src={user.avatar.startsWith('http') 
+                      <Avatar className="w-8 h-8 border-2 border-border">
+                        <AvatarImage 
+                          src={user.avatar ? (
+                            user.avatar.startsWith('http') 
                               ? user.avatar 
                               : `https://ipfs.io/ipfs/${user.avatar.replace('ipfs://', '')}`
-                            } 
-                            alt={user.displayName} 
-                          />
-                        )}
-                        <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                          {user.displayName.slice(0, 2).toUpperCase()}
+                          ) : undefined}
+                          alt={user.displayName}
+                        />
+                        <AvatarFallback className="text-xs font-semibold bg-gradient-to-br from-primary/20 to-primary/10 text-primary">
+                          {user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.username.slice(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5">
                           <p className="text-sm font-medium truncate">{user.displayName}</p>
-                          {user.isVerified && (
-                            <Badge variant="secondary" className="text-xs px-1 py-0">
-                              ✓
-                            </Badge>
+                          {user.isVerified === true && (
+                            <VerifiedBadge size="sm" />
                           )}
-                          {user.isArtist && (
-                            <Badge variant="outline" className="text-xs px-1 py-0">
-                              Artist
+                          {user.isArtist === true && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 leading-none">
+                              🎵 Artist
                             </Badge>
                           )}
                         </div>

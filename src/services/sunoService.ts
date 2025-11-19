@@ -32,7 +32,12 @@ class SunoService {
     // Use demo service if no API key is configured
     if (!this.apiKey) {
       console.warn('⚠️ No VITE_SUNO_API_KEY configured, using demo mode');
+      console.warn('⚠️ Demo mode will return "Demo Generated Song" placeholder data');
+      console.warn('⚠️ To use real AI generation, add VITE_SUNO_API_KEY to your .env file');
       this.currentService = 'demo';
+    } else {
+      console.log('✅ Suno API key configured, using real API');
+      console.log('🔑 API key preview:', this.apiKey.substring(0, 10) + '...');
     }
   }
 
@@ -160,15 +165,11 @@ class SunoService {
     } catch (error) {
       console.error('❌ Music generation failed:', error);
 
-      // If real API fails, fallback to demo mode
-      if (this.currentService === 'suno' && this.apiKey) {
-        console.log('🔄 Falling back to demo mode...');
-        this.currentService = 'demo';
-        return this.generateMockMusic(params);
-      }
+      // ❌ REMOVED: No more automatic fallback to demo mode
+      // Users should get clear error messages instead of dummy data
 
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        throw new Error('Unable to connect to music generation service. Please check your internet connection.');
+        throw new Error('Unable to connect to music generation service. Please check your internet connection or try using a VPN.');
       }
 
       if (error instanceof Error) {
@@ -265,15 +266,11 @@ class SunoService {
     } catch (error) {
       console.error('❌ Task status check failed:', error);
 
-      // If real API fails, fallback to demo mode
-      if (this.currentService === 'suno' && this.apiKey) {
-        console.log('🔄 Falling back to demo mode for status...');
-        this.currentService = 'demo';
-        return this.getMockTaskStatus(taskId);
-      }
+      // ❌ REMOVED: No more automatic fallback to demo mode
+      // Users should get clear error messages instead of dummy data
 
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        throw new Error('Unable to connect to music generation service. Please check your internet connection.');
+        throw new Error('Unable to connect to music generation service. Please check your internet connection or try using a VPN.');
       }
 
       throw error;

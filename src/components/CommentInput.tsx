@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Send, Loader2, AtSign, AlertCircle } from "lucide-react";
 import { useSomniaDatastream } from "@/contexts/SomniaDatastreamContext";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
+import { useAccount } from "wagmi";
 
 interface CommentInputProps {
   onSubmit: (comment: string) => void;
@@ -13,6 +15,8 @@ interface CommentInputProps {
   avatarUrl?: string;
   displayName?: string;
   autoFocus?: boolean;
+  postAuthor?: string; // For sending comment notification
+  postId?: string; // For sending comment notification
 }
 
 const CommentInput = ({
@@ -22,9 +26,12 @@ const CommentInput = ({
   placeholder = "Write a comment...",
   avatarUrl,
   displayName = "User",
-  autoFocus = false
+  autoFocus = false,
+  postAuthor,
+  postId
 }: CommentInputProps) => {
   const { readAllUserProfiles, isConnected, recentEvents } = useSomniaDatastream();
+  const { address } = useAccount();
   
   const [commentText, setCommentText] = useState("");
   const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
@@ -41,24 +48,29 @@ const CommentInput = ({
     const fetchUsers = async () => {
       setIsLoadingUsers(true);
       try {
+        console.log('🔍 [COMMENT] Fetching users from Subgraph + DataStream...');
+        
         // Fetch from Subgraph
         let subgraphUsers: any[] = [];
         try {
           const { apolloClient } = await import('@/lib/apollo-client');
           const { GET_ALL_USERS } = await import('@/graphql/queries');
 
+          console.log('📡 [COMMENT] Querying Subgraph...');
           const result = await apolloClient.query({
             query: GET_ALL_USERS,
             variables: {
               first: 50, // Limit for comment (smaller than post composer)
               skip: 0,
-              orderBy: 'followerCount',
+              orderBy: 'createdAt',
               orderDirection: 'desc'
             },
-            fetchPolicy: 'cache-first' // Use cache for faster loading
+            fetchPolicy: 'network-only' // Always fetch fresh data
           });
 
-          if ((result.data as any)?.userProfiles) {
+          console.log('📡 [COMMENT] Subgraph result:', result);
+
+          if ((result.data as any)?.userProfiles && (result.data as any).userProfiles.length > 0) {
             subgraphUsers = (result.data as any).userProfiles
               .filter((p: any) => p.username)
               .map((p: any) => ({
@@ -67,12 +79,15 @@ const CommentInput = ({
                 avatar: p.avatarHash || '',
                 isArtist: p.isArtist || false,
                 isVerified: p.isVerified || false,
-                userAddress: p.id,
-                followerCount: p.followerCount || 0
+                userAddress: p.id
               }));
+            
+            console.log(`✅ [COMMENT] Loaded ${subgraphUsers.length} users from Subgraph`);
+          } else {
+            console.log('📭 [COMMENT] No users in Subgraph result');
           }
         } catch (error) {
-          console.warn('⚠️ [COMMENT] Subgraph fetch failed:', error);
+          console.error('❌ [COMMENT] Subgraph fetch failed:', error);
         }
 
         // Fetch from DataStream
@@ -111,21 +126,25 @@ const CommentInput = ({
             if (!a.isVerified && b.isVerified) return 1;
             if (a.isArtist && !b.isArtist) return -1;
             if (!a.isArtist && b.isArtist) return 1;
-            if (a.followerCount && b.followerCount) {
-              return b.followerCount - a.followerCount;
-            }
             return a.username.localeCompare(b.username);
           })
           .slice(0, 50);
 
         setAllUsers(mergedUsers);
+        console.log(`✅ [COMMENT] Total users loaded: ${mergedUsers.length}`);
+        
+        if (mergedUsers.length === 0) {
+          console.warn('⚠️ [COMMENT] No users loaded! Check Subgraph and DataStream');
+        }
       } catch (error) {
         console.error('❌ [COMMENT] Failed to fetch users:', error);
+        console.error('Error details:', error);
       } finally {
         setIsLoadingUsers(false);
       }
     };
 
+    // Fetch immediately
     fetchUsers();
   }, [isConnected, readAllUserProfiles]);
 
@@ -236,11 +255,36 @@ const CommentInput = ({
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (commentText.trim() && !isSubmitting && !disabled) {
-      onSubmit(commentText.trim());
+      const comment = commentText.trim();
+      onSubmit(comment);
       setCommentText("");
       setShowMentionSuggestions(false);
+      
+      // 🔔 Send comment notification
+      console.log('🔔 [COMMENT] Checking notification conditions:', {
+        hasAddress: !!address,
+        hasPostAuthor: !!postAuthor,
+        hasPostId: !!postId,
+        isSameUser: address && postAuthor ? address.toLowerCase() === postAuthor.toLowerCase() : false,
+        address: address?.slice(0, 10),
+        postAuthor: postAuthor?.slice(0, 10),
+        postId
+      });
+      
+      if (address && postAuthor && postId && address.toLowerCase() !== postAuthor.toLowerCase()) {
+        try {
+          console.log('🔔 [COMMENT] Sending notification...');
+          const { notificationService } = await import('@/services/notificationService');
+          await notificationService.notifyComment(address, postAuthor, postId, comment);
+          console.log('✅ [COMMENT] Notification sent successfully to:', postAuthor);
+        } catch (error) {
+          console.error('❌ [COMMENT] Failed to send notification:', error);
+        }
+      } else {
+        console.log('⚠️ [COMMENT] Notification not sent - conditions not met');
+      }
     }
   };
 
@@ -303,28 +347,27 @@ const CommentInput = ({
                     onClick={() => selectMention(user.username)}
                     onMouseEnter={() => setSelectedMentionIndex(index)}
                   >
-                    <Avatar className="w-6 h-6">
-                      {user.avatar && (
-                        <AvatarImage 
-                          src={user.avatar.startsWith('http') 
+                    <Avatar className="w-6 h-6 border border-border">
+                      <AvatarImage 
+                        src={user.avatar ? (
+                          user.avatar.startsWith('http') 
                             ? user.avatar 
                             : `https://ipfs.io/ipfs/${user.avatar.replace('ipfs://', '')}`
-                          } 
-                          alt={user.displayName} 
-                        />
-                      )}
-                      <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                        {user.displayName.slice(0, 2).toUpperCase()}
+                        ) : undefined}
+                        alt={user.displayName}
+                      />
+                      <AvatarFallback className="text-xs font-semibold bg-gradient-to-br from-primary/20 to-primary/10 text-primary">
+                        {user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.username.slice(0, 2).toUpperCase()}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1">
                         <p className="text-xs font-medium truncate">{user.displayName}</p>
-                        {user.isVerified && (
-                          <Badge variant="secondary" className="text-xs px-1 py-0 h-4">✓</Badge>
+                        {user.isVerified === true && (
+                          <VerifiedBadge size="sm" />
                         )}
-                        {user.isArtist && (
-                          <Badge variant="outline" className="text-xs px-1 py-0 h-4">Artist</Badge>
+                        {user.isArtist === true && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 h-3.5 leading-none">🎵</Badge>
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground truncate">@{user.username}</p>
