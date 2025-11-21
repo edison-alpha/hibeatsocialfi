@@ -23,7 +23,9 @@
     "test:realtime:all": "npx tsx scripts/testRealtimeFeatures.ts all",
     "register:live-schema": "npx tsx scripts/registerLiveIndicatorsSchema.ts",
     "test:playlist": "npx tsx scripts/testPlaylistCRUD.ts",
-    "test:playlist:features": "npx tsx scripts/testPlaylistFeatures.ts"
+    "test:playlist:features": "npx tsx scripts/testPlaylistFeatures.ts",
+    "test:multi-publisher": "npx tsx scripts/testMultiPublisherInteractions.ts",
+    "test:auto-discovery": "npx tsx scripts/testAutoDiscovery.ts"
   },
   "dependencies": {
     "@0xsequence/connect": "^5.3.29",

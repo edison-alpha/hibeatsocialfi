@@ -371,6 +371,24 @@ class SomniaDatastreamServiceV3 {
         }
       }
 
+      // 🔍 AUTO-DISCOVER: Index new publishers from post authors
+      // This ensures we discover new users who have posted
+      const newPublishers: string[] = [];
+      for (const post of posts) {
+        if (post.author && post.author.startsWith('0x')) {
+          const authorLower = post.author.toLowerCase();
+          if (!publishers.includes(authorLower) && !publisherIndexer.hasPublisher(authorLower)) {
+            newPublishers.push(authorLower);
+            publisherIndexer.addPublisher(authorLower);
+          }
+        }
+      }
+      
+      if (newPublishers.length > 0) {
+        console.log(`🔍 [AUTO-DISCOVER] Found ${newPublishers.length} new publishers from post authors:`, 
+          newPublishers.map(p => p.slice(0, 10) + '...'));
+      }
+
       const loadTime = Date.now() - startTime;
       console.log(`✅ [V3] Loaded ${posts.length} posts in ${loadTime}ms (index-based)`);
 
@@ -673,15 +691,54 @@ class SomniaDatastreamServiceV3 {
       const startTime = Date.now();
       console.log('📚 [V3] Loading interactions...');
 
-      const privateKey = import.meta.env.VITE_PRIVATE_KEY;
-      const publisher = privateKey ? privateKeyToAccount(privateKey as `0x${string}`).address : null;
-      
-      if (!publisher) {
-        throw new Error('Publisher address not found');
+      // ✅ MULTI-PUBLISHER: Get all known publishers
+      const publishers = publisherIndexer.getAllPublishers();
+
+      if (publishers.length === 0) {
+        console.warn('⚠️ [V3] No publishers indexed for interactions, adding server publisher');
+        try {
+          const serverPublisher = await this.getServerPublisherAddress();
+          publisherIndexer.addPublisher(serverPublisher);
+          publishers.push(serverPublisher);
+        } catch (error) {
+          console.error('❌ [V3] Could not add server publisher:', error);
+          return [];
+        }
       }
 
       const schemaId = await this.getSchemaIdCached('interactions');
-      const rawData = await this.sdk.streams.getAllPublisherDataForSchema(schemaId, publisher);
+
+      if (this.DEBUG_MODE) {
+        console.log(`📚 [V3] Loading interactions from ${publishers.length} publishers...`, {
+          publishers: publishers.map((p) => p.slice(0, 10) + '...'),
+          schemaId,
+        });
+      }
+
+      // ✅ MULTI-PUBLISHER: Load interactions from all publishers
+      const allInteractionsArrays = await Promise.all(
+        publishers.map(async (publisher) => {
+          try {
+            if (this.DEBUG_MODE) {
+              console.log(`📥 [V3] Loading interactions from publisher: ${publisher.slice(0, 10)}...`);
+            }
+            const interactions = await this.sdk.streams.getAllPublisherDataForSchema(
+              schemaId,
+              publisher as `0x${string}`
+            );
+            return interactions || [];
+          } catch (error) {
+            console.warn(`⚠️ [V3] Failed to load interactions from publisher ${publisher.slice(0, 10)}:`, error);
+            return [];
+          }
+        })
+      );
+
+      // Merge all interactions from all publishers
+      const rawData = allInteractionsArrays.flat();
+      if (this.DEBUG_MODE) {
+        console.log(`✅ [V3] Got ${rawData.length} total interactions from all publishers`);
+      }
 
       if (!rawData || rawData.length === 0) {
         console.log('📭 [V3] No interactions found');
@@ -775,6 +832,24 @@ class SomniaDatastreamServiceV3 {
       if (targetIds && targetIds.length > 0) {
         const targetIdsNum = targetIds.map(id => typeof id === 'string' ? parseInt(id) : id);
         interactions = interactions.filter(i => targetIdsNum.includes(i.targetId));
+      }
+
+      // 🔍 AUTO-DISCOVER: Index new publishers from interaction authors
+      // This ensures we discover new users who have interacted
+      const newPublishers: string[] = [];
+      for (const interaction of interactions) {
+        if (interaction.fromUser && interaction.fromUser.startsWith('0x')) {
+          const userLower = interaction.fromUser.toLowerCase();
+          if (!publishers.includes(userLower) && !publisherIndexer.hasPublisher(userLower)) {
+            newPublishers.push(userLower);
+            publisherIndexer.addPublisher(userLower);
+          }
+        }
+      }
+      
+      if (newPublishers.length > 0) {
+        console.log(`🔍 [AUTO-DISCOVER] Found ${newPublishers.length} new publishers from interactions:`, 
+          newPublishers.map(p => p.slice(0, 10) + '...'));
       }
 
       const loadTime = Date.now() - startTime;
