@@ -146,7 +146,7 @@ class ProfileService {
     if (!userAddress) return null;
     
     try {
-      console.log('🔍 [ProfileService] Reading profile from contract:', userAddress);
+      // console.log('🔍 [ProfileService] Reading profile from contract:', userAddress);
       
       // Read profile from UserProfile.sol smart contract
       const profileData = await readContract(wagmiConfig, {
@@ -227,15 +227,16 @@ class ProfileService {
         // Keep default 0 values
       }
 
-      console.log('✅ [ProfileService] Profile loaded from contract:', {
-        beatsId: profile.beatsId,
-        username: profile.username,
-        displayName: profile.displayName,
-        isArtist: profile.isArtist,
-        isVerified: profile.isVerified,
-        followerCount: profile.followerCount,
-        followingCount: profile.followingCount
-      });
+      // Removed verbose logging - profile loaded successfully
+      // console.log('✅ [ProfileService] Profile loaded from contract:', {
+      //   beatsId: profile.beatsId,
+      //   username: profile.username,
+      //   displayName: profile.displayName,
+      //   isArtist: profile.isArtist,
+      //   isVerified: profile.isVerified,
+      //   followerCount: profile.followerCount,
+      //   followingCount: profile.followingCount
+      // });
 
       return profile;
       

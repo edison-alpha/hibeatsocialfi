@@ -6,13 +6,14 @@ import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { SequenceConnect } from '@0xsequence/connect';
 import { sequenceConfig } from "@/lib/sequence-config";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
-import { SequenceProvider } from "@/contexts/SequenceContext";
+import { SequenceProvider, useSequence } from "@/contexts/SequenceContext";
 import { SomniaDatastreamProvider } from "@/contexts/SomniaDatastreamContext";
 import { RealtimeTransactionProvider } from "@/contexts/RealtimeTransactionContext";
 import { AudioProvider } from "@/contexts/AudioContext";
 import { PlayCountProvider } from "@/contexts/PlayCountContext";
 import AudioPlayer from "@/components/AudioPlayer";
 import { useMilestoneJob } from "@/hooks/useMilestoneJob";
+import { realtimeIntegration } from "@/services/realtimeIntegration";
 import '@/utils/notificationDebug'; // Load debug helpers
 import '@/utils/notificationDebugger'; // Load notification debugger
 import Index from "./pages/Index";
@@ -35,11 +36,13 @@ import MyCollection from "./pages/MyCollection";
 import UserProfile from "./pages/UserProfile";
 import PostDetail from "./pages/PostDetail";
 import Quests from "./pages/Quests";
+import InteractionLogs from "./pages/InteractionLogs";
 
 import NotFound from "./pages/NotFound";
 import ProfileCreation from "./components/ProfileCreation";
 import ProfileCheckingSkeleton from "./components/ProfileCheckingSkeleton";
 import SessionStatusIndicator from "./components/SessionStatusIndicator";
+import { useEffect } from "react";
 
 // Import integration test only when explicitly enabled
 if (import.meta.env.DEV && import.meta.env.VITE_RUN_INTEGRATION_TESTS === 'true') {
@@ -60,9 +63,54 @@ const AppContent = () => {
     setShowProfileCreation,
     checkingProfile
   } = useAuth();
+  
+  const { smartAccountAddress } = useSequence(); // ✅ Get user address
 
   // 🔔 Start milestone detection background job
   useMilestoneJob(isAuthenticated);
+
+  // 🚀 Initialize real-time services and publisher indexer
+  useEffect(() => {
+    const initRealtime = async () => {
+      if (isAuthenticated) {
+        try {
+          // Initialize without wallet client - it will be set later when needed
+          await realtimeIntegration.initialize();
+          console.log('✅ [APP] Real-time services initialized');
+          
+          // ✅ Initialize publisher indexer with current user and server
+          const { publisherIndexer } = await import('@/services/publisherIndexer');
+          const { privateKeyToAccount } = await import('viem/accounts');
+          
+          // Add current user as publisher
+          if (smartAccountAddress) {
+            publisherIndexer.addPublisher(smartAccountAddress);
+            console.log('✅ [APP] Current user added to publisher index:', smartAccountAddress);
+          }
+          
+          // Add server wallet as publisher (for backward compatibility)
+          const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+          if (privateKey) {
+            const serverAddress = privateKeyToAccount(privateKey as `0x${string}`).address;
+            publisherIndexer.addPublisher(serverAddress);
+            console.log('✅ [APP] Server wallet added to publisher index:', serverAddress);
+          }
+          
+          console.log('📊 [APP] Total publishers indexed:', publisherIndexer.getAllPublishers().length);
+        } catch (error) {
+          console.error('❌ [APP] Failed to initialize real-time services:', error);
+        }
+      }
+    };
+
+    initRealtime();
+
+    return () => {
+      if (realtimeIntegration.isReady()) {
+        realtimeIntegration.disconnect();
+      }
+    };
+  }, [isAuthenticated, smartAccountAddress]);
 
   const handleProfileSave = (profileData: any) => {
     updateProfile(profileData);
@@ -99,6 +147,7 @@ const AppContent = () => {
         <Route path="/post/:id" element={<PostDetail />} />
         <Route path="/album/:albumId" element={<DetailAlbum />} />
         <Route path="/quests" element={<Quests />} />
+        <Route path="/logs" element={<InteractionLogs />} />
         {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
         <Route path="*" element={<NotFound />} />
       </Routes>

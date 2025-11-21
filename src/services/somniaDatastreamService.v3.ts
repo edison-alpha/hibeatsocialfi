@@ -8,9 +8,18 @@
  */
 
 import { SDK, SchemaEncoder } from '@somnia-chain/streams';
-import { createPublicClient, createWalletClient, http, webSocket, type Hex, numberToHex, pad } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  webSocket,
+  type Hex,
+  numberToHex,
+  pad,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { somniaTestnet } from '@/lib/web3-config';
+import { publisherIndexer } from './publisherIndexer';
 import {
   SOMNIA_CONFIG_V3,
   PostDataV3,
@@ -33,6 +42,7 @@ import {
   ActivityHistoryType,
 } from '@/config/somniaDataStreams.v3';
 import { transactionQueue } from './nonceManager';
+import { interactionLogger } from '@/utils/interactionLogger';
 
 // Helper function to convert number to bytes32 (Hex)
 function numberToBytes32(num: number): Hex {
@@ -43,6 +53,9 @@ class SomniaDatastreamServiceV3 {
   private sdk: SDK | null = null;
   private publicClient: any = null;
   private walletClient: any = null;
+  
+  // Debug flag - set to false to reduce console logs
+  private DEBUG_MODE = false; // ✅ Set to false for production
   
   // Caching
   private schemaIdCache: Map<string, Hex> = new Map();
@@ -113,6 +126,17 @@ class SomniaDatastreamServiceV3 {
     }
   }
 
+  /**
+   * Get server publisher address (for backward compatibility)
+   */
+  private async getServerPublisherAddress(): Promise<string> {
+    const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+    if (privateKey) {
+      return privateKeyToAccount(privateKey as `0x${string}`).address;
+    }
+    throw new Error('Server private key not found');
+  }
+
   isConnected(): boolean {
     return this.sdk !== null;
   }
@@ -164,7 +188,10 @@ class SomniaDatastreamServiceV3 {
     const computed = await this.sdk.streams.computeSchemaId(schemaString);
     this.schemaIdCache.set(schemaKey, computed);
     
-    console.log(`🔑 [V3] Schema ID cached: ${schemaName} -> ${computed}`);
+    // Only log once per schema (verbose level)
+    if (!this.schemaIdCache.has(schemaKey)) {
+      console.log(`🔑 [V3] Schema ID cached: ${schemaName} -> ${computed}`);
+    }
     return computed;
   }
 
@@ -181,30 +208,63 @@ class SomniaDatastreamServiceV3 {
 
     try {
       const startTime = Date.now();
-      const startIndex = BigInt(page * pageSize);
-      const endIndex = BigInt((page + 1) * pageSize);
-      
-      const privateKey = import.meta.env.VITE_PRIVATE_KEY;
-      const publisher = privateKey ? privateKeyToAccount(privateKey as `0x${string}`).address : null;
-      
-      if (!publisher) {
-        throw new Error('Publisher address not found');
+
+      // ✅ MULTI-PUBLISHER: Get all known publishers
+      const publishers = publisherIndexer.getAllPublishers();
+
+      if (publishers.length === 0) {
+        console.warn('⚠️ [V3] No publishers indexed, adding server publisher');
+        try {
+          const serverPublisher = await this.getServerPublisherAddress();
+          publisherIndexer.addPublisher(serverPublisher);
+          publishers.push(serverPublisher);
+        } catch (error) {
+          console.error('❌ [V3] Could not add server publisher:', error);
+          return [];
+        }
       }
 
       const schemaId = await this.getSchemaIdCached('posts');
-      
-      console.log(`📚 [V3] Loading posts ${startIndex}-${endIndex} (page ${page})...`, {
-        publisher,
-        schemaId
-      });
-      
-      // ⚡ Use getAllPublisherDataForSchema and slice (getBetweenRange has issues)
-      console.log('📊 [V3] Using getAllPublisherDataForSchema...');
-      const allData = await this.sdk.streams.getAllPublisherDataForSchema(schemaId, publisher);
-      console.log(`✅ [V3] Got ${allData.length} total posts from blockchain`);
-      
-      const rawData = allData.slice(Number(startIndex), Number(endIndex));
-      console.log(`📄 [V3] Sliced to ${rawData.length} posts for page ${page}`);
+
+      if (this.DEBUG_MODE) {
+        console.log(`📚 [V3] Loading posts from ${publishers.length} publishers...`, {
+          publishers: publishers.map((p) => p.slice(0, 10) + '...'),
+          schemaId,
+        });
+      }
+
+      // ✅ MULTI-PUBLISHER: Load posts from all publishers
+      const allPostsArrays = await Promise.all(
+        publishers.map(async (publisher) => {
+          try {
+            if (this.DEBUG_MODE) {
+              console.log(`📥 [V3] Loading from publisher: ${publisher.slice(0, 10)}...`);
+            }
+            const posts = await this.sdk.streams.getAllPublisherDataForSchema(
+              schemaId,
+              publisher as `0x${string}`
+            );
+            return posts || [];
+          } catch (error) {
+            console.warn(`⚠️ [V3] Failed to load from publisher ${publisher.slice(0, 10)}:`, error);
+            return [];
+          }
+        })
+      );
+
+      // Merge all posts from all publishers
+      const allData = allPostsArrays.flat();
+      if (this.DEBUG_MODE) {
+        console.log(`✅ [V3] Got ${allData.length} total posts from all publishers`);
+      }
+
+      // Paginate merged data
+      const startIndex = page * pageSize;
+      const endIndex = startIndex + pageSize;
+      const rawData = allData.slice(startIndex, endIndex);
+      if (this.DEBUG_MODE) {
+        console.log(`📄 [V3] Sliced to ${rawData.length} posts for page ${page}`);
+      }
 
       if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
         console.log('📭 [V3] No posts found in range');
@@ -434,7 +494,7 @@ class SomniaDatastreamServiceV3 {
     
     // Deduplicate requests
     if (this.pendingRequests.has(cacheKey)) {
-      console.log('⚡ [V3] Reusing in-flight request');
+      // console.log('⚡ [V3] Reusing in-flight request');
       return this.pendingRequests.get(cacheKey)!;
     }
     
@@ -583,7 +643,7 @@ class SomniaDatastreamServiceV3 {
     
     // Deduplicate requests
     if (this.pendingRequests.has(cacheKey)) {
-      console.log('⚡ [V3] Reusing in-flight request');
+      // console.log('⚡ [V3] Reusing in-flight request');
       return this.pendingRequests.get(cacheKey)!;
     }
     
@@ -790,8 +850,13 @@ class SomniaDatastreamServiceV3 {
 
   /**
    * Create a new post (batched)
+   * @param userWalletClient Optional user wallet for multi-publisher pattern
    */
-  async createPost(postData: Partial<PostDataV3>, immediate: boolean = false): Promise<number> {
+  async createPost(
+    postData: Partial<PostDataV3>,
+    immediate: boolean = false,
+    userWalletClient?: any
+  ): Promise<number> {
     await this.ensureInitialized();
     
     if (!validatePostData(postData)) {
@@ -801,6 +866,18 @@ class SomniaDatastreamServiceV3 {
     if (!postData.author) {
       throw new Error('Author is required');
     }
+
+    // 📊 START LOGGING
+    const logId = interactionLogger.logStart(
+      'POST',
+      userWalletClient ? 'USER' : 'SERVER',
+      {
+        author: postData.author,
+        content: postData.content?.substring(0, 50),
+        contentType: ContentType[postData.contentType || 0],
+        timestamp: postData.timestamp
+      }
+    );
 
     try {
       console.log('📝 [V3] Creating post...', postData);
@@ -838,33 +915,70 @@ class SomniaDatastreamServiceV3 {
       // Convert number ID to bytes32
       const postIdHex = numberToBytes32(postId);
 
+      // 📊 LOG BLOCKCHAIN DATA
+      interactionLogger.logBlockchainData(
+        logId,
+        schemaId,
+        encodedData,
+        postIdHex
+      );
+
       if (immediate) {
+        // ✅ HYBRID: Use user wallet if provided, fallback to server wallet
+        const sdk = userWalletClient
+          ? new SDK({ public: this.publicClient, wallet: userWalletClient })
+          : this.sdk;
+
         // Immediate write (use transaction queue to prevent nonce conflicts)
         console.log('📤 [V3] Writing post to blockchain...', {
           schemaId,
           postId,
           author,
-          content: postData.content?.substring(0, 50)
+          content: postData.content?.substring(0, 50),
+          wallet: userWalletClient ? 'USER' : 'SERVER',
         });
-        
+
         // Use transaction queue to ensure sequential execution
         await transactionQueue.enqueue(async () => {
-          const txHash = await this.sdk.streams.set([{
-            schemaId,
-            id: postIdHex,
-            data: encodedData,
-          }]);
-          
+          const txHash = await sdk.streams.set([
+            {
+              schemaId,
+              id: postIdHex,
+              data: encodedData,
+            },
+          ]);
+
           console.log('✅ [V3] Post written to blockchain!', {
             txHash,
             postId,
-            schemaId
+            schemaId,
+            wallet: userWalletClient ? 'USER' : 'SERVER',
           });
-          
+
+          // ✅ Index publisher
+          const publisherAddress = userWalletClient
+            ? author // User's wallet = author
+            : await this.getServerPublisherAddress(); // Server wallet
+
+          publisherIndexer.addPublisher(publisherAddress);
+
+          // 📊 LOG SUCCESS
+          interactionLogger.logSuccess(
+            logId,
+            txHash,
+            publisherAddress,
+            {
+              postId,
+              schemaId,
+              author,
+              contentType: ContentType[postData.contentType || 0]
+            }
+          );
+
           this.dataCache.delete('all_posts');
           return txHash;
         });
-        
+
         return postId;
       } else {
         // Add to batch (faster, but delayed)
@@ -875,6 +989,10 @@ class SomniaDatastreamServiceV3 {
       }
     } catch (error) {
       console.error('❌ [V3] Failed to create post:', error);
+      
+      // 📊 LOG FAILURE
+      interactionLogger.logFailure(logId, error as Error);
+      
       throw error;
     }
   }
@@ -952,8 +1070,13 @@ class SomniaDatastreamServiceV3 {
 
   /**
    * Create an interaction (like, comment, repost, etc.) - batched
+   * @param userWalletClient Optional user wallet for multi-publisher pattern
    */
-  async createInteraction(interactionData: Partial<InteractionDataV3>, immediate: boolean = false): Promise<string> {
+  async createInteraction(
+    interactionData: Partial<InteractionDataV3>,
+    immediate: boolean = false,
+    userWalletClient?: any
+  ): Promise<string> {
     if (!validateInteractionData(interactionData)) {
       throw new Error('Invalid interaction data');
     }
@@ -961,6 +1084,20 @@ class SomniaDatastreamServiceV3 {
     if (!this.sdk) {
       throw new Error('SDK not initialized');
     }
+
+    // 📊 START LOGGING
+    const interactionTypeName = InteractionType[interactionData.interactionType!] as any;
+    const logId = interactionLogger.logStart(
+      interactionTypeName,
+      userWalletClient ? 'USER' : 'SERVER',
+      {
+        fromUser: interactionData.fromUser,
+        targetId: interactionData.targetId,
+        interactionType: interactionData.interactionType,
+        content: interactionData.content?.substring(0, 50),
+        timestamp: interactionData.timestamp
+      }
+    );
 
     try {
       console.log('📝 [V3] Creating interaction:', InteractionType[interactionData.interactionType!]);
@@ -1007,32 +1144,93 @@ class SomniaDatastreamServiceV3 {
       // Convert number ID to bytes32
       const idHex = numberToBytes32(id);
 
+      // 📊 LOG BLOCKCHAIN DATA
+      interactionLogger.logBlockchainData(
+        logId,
+        schemaId,
+        encodedData,
+        idHex
+      );
+
       if (immediate) {
+        // ✅ HYBRID: Use user wallet if provided, fallback to server wallet
+        const sdk = userWalletClient
+          ? new SDK({ public: this.publicClient, wallet: userWalletClient })
+          : this.sdk;
+
         // Immediate write (use transaction queue to prevent nonce conflicts)
-        console.log('📤 [V3] Writing interaction to blockchain...');
-        
+        console.log('📤 [V3] Writing interaction to blockchain...', {
+          wallet: userWalletClient ? 'USER' : 'SERVER',
+        });
+
         // Use transaction queue to ensure sequential execution
         const txHash = await transactionQueue.enqueue(async () => {
-          const hash = await this.sdk.streams.set([{
-            schemaId,
-            id: idHex,
-            data: encodedData,
-          }]);
-          
-          console.log('✅ [V3] Interaction created (immediate):', hash);
+          const hash = await sdk.streams.set([
+            {
+              schemaId,
+              id: idHex,
+              data: encodedData,
+            },
+          ]);
+
+          console.log('✅ [V3] Interaction created (immediate):', {
+            hash,
+            wallet: userWalletClient ? 'USER' : 'SERVER',
+          });
+
+          // ✅ Index publisher
+          const publisherAddress = userWalletClient
+            ? interactionData.fromUser! // User's wallet = fromUser
+            : await this.getServerPublisherAddress(); // Server wallet
+
+          publisherIndexer.addPublisher(publisherAddress);
+
+          // 📊 LOG SUCCESS
+          interactionLogger.logSuccess(
+            logId,
+            hash,
+            publisherAddress,
+            {
+              interactionId: id,
+              interactionType: InteractionType[interactionData.interactionType!],
+              targetId,
+              fromUser: interactionData.fromUser
+            }
+          );
+
           this.dataCache.delete('all_interactions');
           return hash;
         });
-        
+
         return txHash;
       } else {
         // Add to batch (for non-critical interactions like likes)
         this.addToBatch(schemaId, idHex, encodedData);
         console.log('✅ [V3] Interaction added to batch');
+        
+        // 📊 LOG SUCCESS (batched)
+        interactionLogger.logSuccess(
+          logId,
+          'batched',
+          interactionData.fromUser || 'unknown',
+          { batched: true }
+        );
+        
         return 'batched';
       }
     } catch (error) {
       console.error('❌ [V3] Failed to create interaction:', error);
+      
+      // 📊 LOG FAILURE
+      interactionLogger.logFailure(logId, error as Error);
+      
+      // Check if it's a network timeout
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('timeout') || errorMessage.includes('deadline exceeded')) {
+        console.warn('⚠️ [V3] Network timeout detected - transaction may still succeed');
+        console.warn('💡 [V3] Suggestion: Wait a moment and check if transaction completed, or retry');
+      }
+      
       throw error;
     }
   }
@@ -1834,13 +2032,13 @@ class SomniaDatastreamServiceV3 {
     // Check cache
     const cached = this.dataCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
-      console.log('⚡ [V3] Using cached play events');
+      // console.log('⚡ [V3] Using cached play events');
       return cached.data as PlayEventData[];
     }
 
     try {
       const startTime = Date.now();
-      console.log('🎵 [V3] Loading all play events...');
+      // console.log('🎵 [V3] Loading all play events...');
 
       const privateKey = import.meta.env.VITE_PRIVATE_KEY;
       const publisher = privateKey ? privateKeyToAccount(privateKey as `0x${string}`).address : null;
@@ -2054,7 +2252,7 @@ class SomniaDatastreamServiceV3 {
    * Get bookmarked posts for a user
    */
   async getBookmarkedPosts(userAddress: string): Promise<PostDataV3[]> {
-    console.log('🔖 [V3] Getting bookmarked posts for:', userAddress);
+    // Removed verbose logging - use debug tools if needed
     
     try {
       // Get all interactions
@@ -2086,7 +2284,10 @@ class SomniaDatastreamServiceV3 {
         .filter(([_, isBookmarked]) => isBookmarked)
         .map(([postId, _]) => postId);
       
-      console.log('🔖 [V3] Found', bookmarkedPostIds.length, 'bookmarked posts');
+      // Only log if bookmarks found (reduce noise)
+      if (bookmarkedPostIds.length > 0) {
+        console.log('🔖 [V3] Found', bookmarkedPostIds.length, 'bookmarked posts');
+      }
       
       // Get all posts
       const allPosts = await this.getAllPosts();
@@ -2282,7 +2483,7 @@ class SomniaDatastreamServiceV3 {
       // Count active followers
       const count = Array.from(followState.values()).filter(isFollowing => isFollowing).length;
       
-      console.log('👥 [V3] Follower count for', userAddress, ':', count);
+      // Removed verbose logging - use debug tools if needed
       return count;
     } catch (error) {
       console.error('❌ [V3] Failed to get follower count:', error);
@@ -2322,7 +2523,7 @@ class SomniaDatastreamServiceV3 {
       // Count active follows
       const count = Array.from(followState.values()).filter(isFollowing => isFollowing).length;
       
-      console.log('👥 [V3] Following count for', userAddress, ':', count);
+      // Removed verbose logging - use debug tools if needed
       return count;
     } catch (error) {
       console.error('❌ [V3] Failed to get following count:', error);

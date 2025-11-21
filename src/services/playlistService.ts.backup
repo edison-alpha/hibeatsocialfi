@@ -1,0 +1,1218 @@
+// Playlist Service - Somnia Data Streams Integration
+// Manages user playlists on blockchain with optimistic updates
+
+import { SDK, SchemaEncoder } from '@somnia-chain/streams';
+import { createPublicClient, createWalletClient, http, keccak256, toBytes, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { somniaTestnet } from '@/lib/web3-config';
+import { playlistInteractionService } from './playlistInteractionService';
+
+// ===== TYPES =====
+
+export interface Playlist {
+  id: string;
+  owner: string;
+  title: string;
+  description: string;
+  coverHash: string;
+  trackIds: string[];
+  isPublic: boolean;
+  isDeleted: boolean;
+  timestamp: number;
+  
+  // ===== NEW: SOCIAL FEATURES (HIGH PRIORITY) =====
+  followers?: string[];          // Array of follower wallet addresses
+  followerCount?: number;        // Computed follower count
+  likeCount?: number;            // Number of likes
+  playCount?: number;            // Number of plays
+  
+  // ===== NEW: COLLABORATION FEATURES (MEDIUM PRIORITY) =====
+  isCollaborative?: boolean;     // Allow multiple editors
+  collaborators?: string[];      // Array of collaborator addresses
+  
+  // ===== COMPUTED FIELDS =====
+  trackCount?: number;
+  totalDuration?: number;        // Total playlist duration in seconds
+  createdAt?: number;            // Creation timestamp
+  updatedAt?: number;            // Last update timestamp
+}
+
+export interface PlaylistTrack {
+  id: string;
+  title: string;
+  artist: string;
+  duration: string | number;
+  genre: string;
+  cover: string;
+  audioUrl?: string;
+}
+
+// ===== NEW: TRACK METADATA (MEDIUM PRIORITY) =====
+export interface PlaylistTrackMetadata {
+  playlistId: string;
+  trackId: string;
+  addedAt: number;               // When track was added
+  addedBy: string;               // Who added the track
+  position: number;              // Track order in playlist
+}
+
+// ===== NEW: PLAYLIST INTERACTION TYPES =====
+export type PlaylistInteractionType = 'follow' | 'unfollow' | 'like' | 'unlike' | 'play';
+
+export interface PlaylistInteraction {
+  playlistId: string;
+  userAddress: string;
+  interactionType: PlaylistInteractionType;
+  timestamp: number;
+}
+
+// ===== NEW: TRENDING & DISCOVERY =====
+export interface TrendingScore {
+  playlistId: string;
+  score: number;                 // Trending score (0-100)
+  rank: number;                  // Trending rank
+  velocity: number;              // Growth velocity
+  timestamp: number;             // When score was calculated
+}
+
+export interface PlaylistWithScore extends Playlist {
+  trendingScore?: number;
+  trendingRank?: number;
+  velocity?: number;
+}
+
+// ===== PLAYLIST SERVICE =====
+
+class PlaylistService {
+  private sdk: SDK | null = null;
+  private publicClient: any = null;
+  private walletClient: any = null;
+  private schemaId: Hex | null = null;
+  
+  // Cache
+  private playlistCache: Map<string, Playlist> = new Map();
+  private userPlaylistsCache: Map<string, Playlist[]> = new Map();
+  private cacheTimestamp: number = 0;
+  private readonly CACHE_TTL = 30000; // 30 seconds
+
+  constructor() {
+    this.initializeClients();
+  }
+
+  // ===== INITIALIZATION =====
+
+  private initializeClients(): void {
+    try {
+      const RPC_URL = import.meta.env.VITE_SOMNIA_RPC_URL || 'https://dream-rpc.somnia.network';
+
+      this.publicClient = createPublicClient({
+        chain: somniaTestnet,
+        transport: http(RPC_URL),
+      });
+
+      const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+      if (privateKey) {
+        const account = privateKeyToAccount(privateKey as `0x${string}`);
+        this.walletClient = createWalletClient({
+          account,
+          chain: somniaTestnet,
+          transport: http(RPC_URL),
+        });
+      }
+
+      console.log('✅ [PLAYLIST] Clients initialized');
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to initialize clients:', error);
+    }
+  }
+
+  async connect(externalWalletClient?: any): Promise<void> {
+    try {
+      if (externalWalletClient && !this.walletClient) {
+        this.walletClient = externalWalletClient;
+      }
+
+      this.sdk = new SDK({
+        public: this.publicClient,
+        wallet: this.walletClient,
+      });
+
+      // Compute schema ID
+      const playlistSchema = 'uint64 timestamp, uint256 playlistId, address owner, string title, string description, string coverHash, string trackIds, bool isPublic, bool isDeleted';
+      this.schemaId = await this.sdk.streams.computeSchemaId(playlistSchema);
+
+      console.log('✅ [PLAYLIST] SDK initialized');
+      console.log(`🔑 [PLAYLIST] Schema ID: ${this.schemaId}`);
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to initialize SDK:', error);
+      throw error;
+    }
+  }
+
+  isConnected(): boolean {
+    return this.sdk !== null && this.schemaId !== null;
+  }
+
+  // ===== HELPER METHODS =====
+
+  private async getPublisherAddress(): Promise<string> {
+    const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+    if (privateKey) {
+      const account = privateKeyToAccount(privateKey as `0x${string}`);
+      return account.address;
+    }
+    return '';
+  }
+
+  private async getPrivateKeySDK(): Promise<SDK> {
+    const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+    if (!privateKey) {
+      throw new Error('VITE_PRIVATE_KEY not found');
+    }
+
+    const account = privateKeyToAccount(privateKey as `0x${string}`);
+    const wallet = createWalletClient({
+      account,
+      chain: somniaTestnet,
+      transport: http(import.meta.env.VITE_SOMNIA_RPC_URL || 'https://dream-rpc.somnia.network'),
+    });
+
+    return new SDK({
+      public: this.publicClient,
+      wallet: wallet,
+    });
+  }
+
+  private generatePlaylistId(owner: string, timestamp: number): string {
+    return keccak256(toBytes(`playlist_${owner}_${timestamp}`));
+  }
+
+  private isCacheValid(): boolean {
+    return Date.now() - this.cacheTimestamp < this.CACHE_TTL;
+  }
+
+  // ===== CREATE PLAYLIST (✅ MULTI-PUBLISHER SUPPORT) =====
+
+  async createPlaylist(
+    owner: string,
+    title: string,
+    description: string,
+    coverHash: string,
+    trackIds: string[],
+    isPublic: boolean,
+    walletClient?: any  // ✅ NEW: Optional wallet client for USER wallet
+  ): Promise<Playlist> {
+    if (!this.sdk || !this.schemaId) {
+      throw new Error('SDK not initialized');
+    }
+
+    try {
+      const timestamp = Date.now();
+      const playlistId = this.generatePlaylistId(owner, timestamp);
+
+      const walletType = walletClient ? 'USER' : 'SERVER';
+      console.log(`📝 [PLAYLIST] Creating playlist: ${title} (${walletType} wallet)`);
+
+      // ⚡ OPTIMISTIC UPDATE - Create playlist object immediately
+      const playlist: Playlist = {
+        id: playlistId,
+        owner,
+        title,
+        description,
+        coverHash,
+        trackIds,
+        isPublic,
+        isDeleted: false,
+        timestamp,
+        trackCount: trackIds.length,
+        likeCount: 0,
+        playCount: 0
+      };
+
+      // Update cache immediately
+      this.playlistCache.set(playlistId, playlist);
+      
+      // Update user playlists cache
+      const userPlaylists = this.userPlaylistsCache.get(owner.toLowerCase()) || [];
+      this.userPlaylistsCache.set(owner.toLowerCase(), [playlist, ...userPlaylists]);
+
+      console.log(`⚡ [PLAYLIST-OPTIMISTIC] Playlist created in cache`);
+
+      // 📤 BACKGROUND WRITE - Write to blockchain with specified wallet
+      this.writePlaylistToBlockchain(playlist, walletClient).catch(error => {
+        console.error('❌ [PLAYLIST-BACKGROUND] Failed to write:', error);
+      });
+
+      return playlist;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to create playlist:', error);
+      throw error;
+    }
+  }
+
+  private async writePlaylistToBlockchain(playlist: Playlist, walletClient?: any): Promise<void> {
+    try {
+      // ✅ Use USER wallet if provided, otherwise use SERVER wallet
+      const sdk = walletClient 
+        ? new SDK({ public: this.publicClient, wallet: walletClient })
+        : await this.getPrivateKeySDK();
+      
+      const publisherAddress = walletClient
+        ? walletClient.account.address
+        : await this.getPublisherAddress();
+      
+      const walletType = walletClient ? 'USER' : 'SERVER';
+      console.log(`📤 [PLAYLIST] Writing to blockchain using ${walletType} wallet: ${publisherAddress.slice(0, 10)}...`);
+
+      const playlistSchema = 'uint64 timestamp, uint256 playlistId, address owner, string title, string description, string coverHash, string trackIds, bool isPublic, bool isDeleted';
+      const encoder = new SchemaEncoder(playlistSchema);
+
+      const streamId = keccak256(toBytes(`playlist_stream_${playlist.id}_${Date.now()}`));
+      const encodedData = encoder.encodeData([
+        { name: 'timestamp', value: playlist.timestamp.toString(), type: 'uint64' },
+        { name: 'playlistId', value: playlist.id, type: 'uint256' },
+        { name: 'owner', value: playlist.owner, type: 'address' },
+        { name: 'title', value: playlist.title, type: 'string' },
+        { name: 'description', value: playlist.description, type: 'string' },
+        { name: 'coverHash', value: playlist.coverHash, type: 'string' },
+        { name: 'trackIds', value: playlist.trackIds.join(','), type: 'string' },
+        { name: 'isPublic', value: playlist.isPublic, type: 'bool' },
+        { name: 'isDeleted', value: playlist.isDeleted, type: 'bool' }
+      ]);
+
+      await sdk.streams.set([{
+        id: streamId,
+        schemaId: this.schemaId!,
+        data: encodedData as Hex
+      }]);
+
+      console.log(`✅ [PLAYLIST-BACKGROUND] Written to blockchain by ${publisherAddress.slice(0, 10)}... (${walletType})`);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // ===== GET USER PLAYLISTS =====
+
+  async getUserPlaylists(userAddress: string, forceRefresh: boolean = false): Promise<Playlist[]> {
+    if (!this.sdk || !this.schemaId) {
+      throw new Error('SDK not initialized');
+    }
+
+    const userLower = userAddress.toLowerCase();
+
+    // Check cache
+    if (!forceRefresh && this.isCacheValid() && this.userPlaylistsCache.has(userLower)) {
+      console.log(`💾 [PLAYLIST] Cache hit for user ${userLower.slice(0, 10)}...`);
+      return this.userPlaylistsCache.get(userLower)!;
+    }
+
+    try {
+      console.log(`🔍 [PLAYLIST] Loading playlists for user ${userLower.slice(0, 10)}...`);
+
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      const playlists: Playlist[] = [];
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.owner.toLowerCase() === userLower && !playlist.isDeleted) {
+              playlists.push(playlist);
+            }
+          } catch (error) {
+            console.warn('⚠️ [PLAYLIST] Failed to parse record:', error);
+          }
+        }
+      }
+
+      // Sort by timestamp (newest first)
+      playlists.sort((a, b) => b.timestamp - a.timestamp);
+
+      // Update cache
+      this.userPlaylistsCache.set(userLower, playlists);
+      this.cacheTimestamp = Date.now();
+
+      console.log(`✅ [PLAYLIST] Loaded ${playlists.length} playlists`);
+      return playlists;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to load playlists:', error);
+      return [];
+    }
+  }
+
+  // ===== GET PLAYLIST BY ID =====
+
+  async getPlaylistById(playlistId: string): Promise<Playlist | null> {
+    if (!this.sdk || !this.schemaId) {
+      throw new Error('SDK not initialized');
+    }
+
+    // Check cache
+    if (this.playlistCache.has(playlistId)) {
+      return this.playlistCache.get(playlistId)!;
+    }
+
+    try {
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.id === playlistId && !playlist.isDeleted) {
+              this.playlistCache.set(playlistId, playlist);
+              return playlist;
+            }
+          } catch (error) {
+            // Skip
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to get playlist:', error);
+      return null;
+    }
+  }
+
+  // ===== UPDATE PLAYLIST (✅ MULTI-PUBLISHER SUPPORT) =====
+
+  async updatePlaylist(
+    playlistId: string,
+    updates: Partial<Omit<Playlist, 'id' | 'owner' | 'timestamp'>>,
+    walletClient?: any  // ✅ NEW: Optional wallet client
+  ): Promise<Playlist | null> {
+    const existingPlaylist = await this.getPlaylistById(playlistId);
+    if (!existingPlaylist) {
+      throw new Error('Playlist not found');
+    }
+
+    const updatedPlaylist: Playlist = {
+      ...existingPlaylist,
+      ...updates,
+      timestamp: Date.now() // Update timestamp
+    };
+
+    // ⚡ OPTIMISTIC UPDATE
+    this.playlistCache.set(playlistId, updatedPlaylist);
+
+    // Update user cache
+    const userPlaylists = this.userPlaylistsCache.get(existingPlaylist.owner.toLowerCase()) || [];
+    const index = userPlaylists.findIndex(p => p.id === playlistId);
+    if (index !== -1) {
+      userPlaylists[index] = updatedPlaylist;
+      this.userPlaylistsCache.set(existingPlaylist.owner.toLowerCase(), userPlaylists);
+    }
+
+    console.log(`⚡ [PLAYLIST-OPTIMISTIC] Playlist updated in cache`);
+
+    // 📤 BACKGROUND WRITE with specified wallet
+    this.writePlaylistToBlockchain(updatedPlaylist, walletClient).catch(error => {
+      console.error('❌ [PLAYLIST-BACKGROUND] Failed to update:', error);
+    });
+
+    return updatedPlaylist;
+  }
+
+  // ===== DELETE PLAYLIST (✅ MULTI-PUBLISHER SUPPORT) =====
+
+  async deletePlaylist(playlistId: string, walletClient?: any): Promise<boolean> {
+    const playlist = await this.getPlaylistById(playlistId);
+    if (!playlist) {
+      return false;
+    }
+
+    // Soft delete
+    const deletedPlaylist: Playlist = {
+      ...playlist,
+      isDeleted: true,
+      timestamp: Date.now()
+    };
+
+    // ⚡ OPTIMISTIC UPDATE
+    this.playlistCache.delete(playlistId);
+
+    // Remove from user cache
+    const userPlaylists = this.userPlaylistsCache.get(playlist.owner.toLowerCase()) || [];
+    const filtered = userPlaylists.filter(p => p.id !== playlistId);
+    this.userPlaylistsCache.set(playlist.owner.toLowerCase(), filtered);
+
+    console.log(`⚡ [PLAYLIST-OPTIMISTIC] Playlist deleted from cache`);
+
+    // 📤 BACKGROUND WRITE with specified wallet
+    this.writePlaylistToBlockchain(deletedPlaylist, walletClient).catch(error => {
+      console.error('❌ [PLAYLIST-BACKGROUND] Failed to delete:', error);
+    });
+
+    return true;
+  }
+
+  // ===== ADD TRACK TO PLAYLIST (✅ MULTI-PUBLISHER SUPPORT) =====
+
+  async addTrackToPlaylist(playlistId: string, trackId: string, walletClient?: any): Promise<Playlist | null> {
+    const playlist = await this.getPlaylistById(playlistId);
+    if (!playlist) {
+      return null;
+    }
+
+    if (playlist.trackIds.includes(trackId)) {
+      console.log(`⚠️ [PLAYLIST] Track already in playlist`);
+      return playlist;
+    }
+
+    return this.updatePlaylist(playlistId, {
+      trackIds: [...playlist.trackIds, trackId]
+    }, walletClient);
+  }
+
+  // ===== REMOVE TRACK FROM PLAYLIST (✅ MULTI-PUBLISHER SUPPORT) =====
+
+  async removeTrackFromPlaylist(playlistId: string, trackId: string, walletClient?: any): Promise<Playlist | null> {
+    const playlist = await this.getPlaylistById(playlistId);
+    if (!playlist) {
+      return null;
+    }
+
+    return this.updatePlaylist(playlistId, {
+      trackIds: playlist.trackIds.filter(id => id !== trackId)
+    }, walletClient);
+  }
+
+  // ===== PARSE HELPER =====
+
+  private parsePlaylistData(item: any): Playlist | null {
+    try {
+      const extractValue = (val: any): any => {
+        if (val && typeof val === 'object' && 'value' in val) {
+          return extractValue(val.value);
+        }
+        return val;
+      };
+
+      let timestampValue, playlistIdValue, ownerValue, titleValue, descriptionValue;
+      let coverHashValue, trackIdsValue, isPublicValue, isDeletedValue;
+
+      const itemAny = item as any;
+
+      if (itemAny.playlistId && itemAny.owner) {
+        timestampValue = itemAny.timestamp;
+        playlistIdValue = itemAny.playlistId;
+        ownerValue = itemAny.owner;
+        titleValue = itemAny.title;
+        descriptionValue = itemAny.description;
+        coverHashValue = itemAny.coverHash;
+        trackIdsValue = itemAny.trackIds;
+        isPublicValue = itemAny.isPublic;
+        isDeletedValue = itemAny.isDeleted;
+      } else if (Array.isArray(itemAny)) {
+        timestampValue = extractValue(itemAny.find((i: any) => i.name === 'timestamp')?.value);
+        playlistIdValue = extractValue(itemAny.find((i: any) => i.name === 'playlistId')?.value);
+        ownerValue = extractValue(itemAny.find((i: any) => i.name === 'owner')?.value);
+        titleValue = extractValue(itemAny.find((i: any) => i.name === 'title')?.value);
+        descriptionValue = extractValue(itemAny.find((i: any) => i.name === 'description')?.value);
+        coverHashValue = extractValue(itemAny.find((i: any) => i.name === 'coverHash')?.value);
+        trackIdsValue = extractValue(itemAny.find((i: any) => i.name === 'trackIds')?.value);
+        isPublicValue = extractValue(itemAny.find((i: any) => i.name === 'isPublic')?.value);
+        isDeletedValue = extractValue(itemAny.find((i: any) => i.name === 'isDeleted')?.value);
+      }
+
+      if (!playlistIdValue || !ownerValue) {
+        return null;
+      }
+
+      const trackIds = trackIdsValue ? String(trackIdsValue).split(',').filter(id => id.trim()) : [];
+
+      return {
+        id: String(playlistIdValue),
+        owner: String(ownerValue),
+        title: String(titleValue || 'Untitled Playlist'),
+        description: String(descriptionValue || ''),
+        coverHash: String(coverHashValue || ''),
+        trackIds,
+        isPublic: Boolean(isPublicValue),
+        isDeleted: Boolean(isDeletedValue),
+        timestamp: Number(timestampValue) || Date.now(),
+        trackCount: trackIds.length
+      };
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Parse error:', error);
+      return null;
+    }
+  }
+
+  // ===== CLEAR CACHE =====
+
+  clearCache(): void {
+    this.playlistCache.clear();
+    this.userPlaylistsCache.clear();
+    this.cacheTimestamp = 0;
+    console.log('🗑️ [PLAYLIST] Cache cleared');
+  }
+
+  // ===== NEW: SOCIAL FEATURES (HIGH PRIORITY) =====
+
+  /**
+   * Follow a playlist
+   */
+  async followPlaylist(playlistId: string, userAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      // Initialize interaction service if needed
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect(walletClient);
+      }
+
+      // Record follow interaction
+      const success = await playlistInteractionService.recordInteraction(
+        playlistId,
+        userAddress,
+        'follow',
+        walletClient
+      );
+
+      if (success) {
+        // Update cache
+        const playlist = this.playlistCache.get(playlistId);
+        if (playlist) {
+          const followers = playlist.followers || [];
+          if (!followers.includes(userAddress.toLowerCase())) {
+            playlist.followers = [...followers, userAddress.toLowerCase()];
+            playlist.followerCount = playlist.followers.length;
+            this.playlistCache.set(playlistId, playlist);
+          }
+        }
+        
+        console.log(`✅ [PLAYLIST] User ${userAddress.slice(0, 10)}... followed playlist`);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to follow:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Unfollow a playlist
+   */
+  async unfollowPlaylist(playlistId: string, userAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      // Initialize interaction service if needed
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect(walletClient);
+      }
+
+      // Record unfollow interaction
+      const success = await playlistInteractionService.recordInteraction(
+        playlistId,
+        userAddress,
+        'unfollow',
+        walletClient
+      );
+
+      if (success) {
+        // Update cache
+        const playlist = this.playlistCache.get(playlistId);
+        if (playlist && playlist.followers) {
+          playlist.followers = playlist.followers.filter(f => f.toLowerCase() !== userAddress.toLowerCase());
+          playlist.followerCount = playlist.followers.length;
+          this.playlistCache.set(playlistId, playlist);
+        }
+        
+        console.log(`✅ [PLAYLIST] User ${userAddress.slice(0, 10)}... unfollowed playlist`);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to unfollow:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if user is following a playlist
+   */
+  async isFollowing(playlistId: string, userAddress: string): Promise<boolean> {
+    try {
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect();
+      }
+      return await playlistInteractionService.isFollowing(playlistId, userAddress);
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to check following status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Like a playlist
+   */
+  async likePlaylist(playlistId: string, userAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      // Initialize interaction service if needed
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect(walletClient);
+      }
+
+      // Record like interaction
+      const success = await playlistInteractionService.recordInteraction(
+        playlistId,
+        userAddress,
+        'like',
+        walletClient
+      );
+
+      if (success) {
+        // Update cache
+        const playlist = this.playlistCache.get(playlistId);
+        if (playlist) {
+          playlist.likeCount = (playlist.likeCount || 0) + 1;
+          this.playlistCache.set(playlistId, playlist);
+        }
+        
+        console.log(`✅ [PLAYLIST] Playlist liked`);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to like:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Unlike a playlist
+   */
+  async unlikePlaylist(playlistId: string, userAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      // Initialize interaction service if needed
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect(walletClient);
+      }
+
+      // Record unlike interaction
+      const success = await playlistInteractionService.recordInteraction(
+        playlistId,
+        userAddress,
+        'unlike',
+        walletClient
+      );
+
+      if (success) {
+        // Update cache
+        const playlist = this.playlistCache.get(playlistId);
+        if (playlist) {
+          playlist.likeCount = Math.max(0, (playlist.likeCount || 0) - 1);
+          this.playlistCache.set(playlistId, playlist);
+        }
+        
+        console.log(`✅ [PLAYLIST] Playlist unliked`);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to unlike:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Increment play count
+   */
+  async incrementPlayCount(playlistId: string): Promise<boolean> {
+    try {
+      // Initialize interaction service if needed
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect();
+      }
+
+      // Record play interaction (use server wallet for background operation)
+      const success = await playlistInteractionService.recordInteraction(
+        playlistId,
+        'system', // System user for play counts
+        'play'
+      );
+
+      if (success) {
+        // Update cache
+        const playlist = this.playlistCache.get(playlistId);
+        if (playlist) {
+          playlist.playCount = (playlist.playCount || 0) + 1;
+          this.playlistCache.set(playlistId, playlist);
+        }
+        
+        console.log(`✅ [PLAYLIST] Play count incremented`);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to increment play count:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get playlist with stats
+   */
+  async getPlaylistWithStats(playlistId: string): Promise<Playlist | null> {
+    try {
+      const playlist = await this.getPlaylistById(playlistId);
+      if (!playlist) return null;
+
+      // Get stats from interaction service
+      if (!playlistInteractionService.isConnected()) {
+        await playlistInteractionService.connect();
+      }
+
+      const stats = await playlistInteractionService.getPlaylistStats(playlistId);
+      
+      // Merge stats with playlist
+      playlist.followers = stats.followers;
+      playlist.followerCount = stats.followerCount;
+      playlist.likeCount = stats.likeCount;
+      playlist.playCount = stats.playCount;
+
+      return playlist;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to get playlist with stats:', error);
+      return null;
+    }
+  }
+
+  // ===== NEW: COLLABORATION FEATURES (MEDIUM PRIORITY) =====
+
+  /**
+   * Add collaborator to playlist
+   */
+  async addCollaborator(playlistId: string, collaboratorAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      const playlist = await this.getPlaylistById(playlistId);
+      if (!playlist) {
+        throw new Error('Playlist not found');
+      }
+
+      const collaborators = playlist.collaborators || [];
+      
+      // Check if already a collaborator
+      if (collaborators.includes(collaboratorAddress.toLowerCase())) {
+        console.log('⚠️ [PLAYLIST] Already a collaborator');
+        return true;
+      }
+
+      // Add collaborator
+      const updatedCollaborators = [...collaborators, collaboratorAddress.toLowerCase()];
+      
+      await this.updatePlaylist(playlistId, {
+        collaborators: updatedCollaborators,
+        isCollaborative: true
+      }, walletClient);
+
+      console.log(`✅ [PLAYLIST] Collaborator ${collaboratorAddress.slice(0, 10)}... added`);
+      return true;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to add collaborator:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Remove collaborator from playlist
+   */
+  async removeCollaborator(playlistId: string, collaboratorAddress: string, walletClient?: any): Promise<boolean> {
+    try {
+      const playlist = await this.getPlaylistById(playlistId);
+      if (!playlist) {
+        throw new Error('Playlist not found');
+      }
+
+      const collaborators = playlist.collaborators || [];
+      const updatedCollaborators = collaborators.filter(c => c.toLowerCase() !== collaboratorAddress.toLowerCase());
+      
+      await this.updatePlaylist(playlistId, {
+        collaborators: updatedCollaborators,
+        isCollaborative: updatedCollaborators.length > 0
+      }, walletClient);
+
+      console.log(`✅ [PLAYLIST] Collaborator ${collaboratorAddress.slice(0, 10)}... removed`);
+      return true;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to remove collaborator:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if user can edit playlist (owner or collaborator)
+   */
+  canEdit(playlist: Playlist, userAddress: string): boolean {
+    if (playlist.owner.toLowerCase() === userAddress.toLowerCase()) {
+      return true;
+    }
+    
+    if (playlist.isCollaborative && playlist.collaborators) {
+      return playlist.collaborators.includes(userAddress.toLowerCase());
+    }
+    
+    return false;
+  }
+
+  /**
+   * Toggle collaborative mode
+   */
+  async toggleCollaborative(playlistId: string, walletClient?: any): Promise<boolean> {
+    try {
+      const playlist = await this.getPlaylistById(playlistId);
+      if (!playlist) {
+        throw new Error('Playlist not found');
+      }
+
+      await this.updatePlaylist(playlistId, {
+        isCollaborative: !playlist.isCollaborative
+      }, walletClient);
+
+      console.log(`✅ [PLAYLIST] Collaborative mode: ${!playlist.isCollaborative}`);
+      return true;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to toggle collaborative:', error);
+      return false;
+    }
+  }
+
+  // ===== NEW: TRENDING & DISCOVERY =====
+
+  /**
+   * Calculate trending score for a playlist
+   * Algorithm considers:
+   * - Recent plays (weight: 40%)
+   * - Recent likes (weight: 30%)
+   * - Recent follows (weight: 20%)
+   * - Growth velocity (weight: 10%)
+   */
+  private calculateTrendingScore(playlist: Playlist): number {
+    const now = Date.now();
+    const dayInMs = 24 * 60 * 60 * 1000;
+    const weekInMs = 7 * dayInMs;
+    
+    // Age factor (newer playlists get slight boost)
+    const age = now - (playlist.timestamp || now);
+    const ageFactor = Math.max(0, 1 - (age / (30 * dayInMs))); // Decay over 30 days
+    
+    // Engagement metrics
+    const plays = playlist.playCount || 0;
+    const likes = playlist.likeCount || 0;
+    const followers = playlist.followerCount || 0;
+    
+    // Normalize metrics (log scale for better distribution)
+    const normalizedPlays = Math.log10(plays + 1) * 10;
+    const normalizedLikes = Math.log10(likes + 1) * 10;
+    const normalizedFollowers = Math.log10(followers + 1) * 10;
+    
+    // Weighted score
+    const score = (
+      normalizedPlays * 0.40 +      // 40% weight on plays
+      normalizedLikes * 0.30 +      // 30% weight on likes
+      normalizedFollowers * 0.20 +  // 20% weight on followers
+      ageFactor * 10 * 0.10         // 10% weight on recency
+    );
+    
+    // Cap at 100
+    return Math.min(100, Math.max(0, score));
+  }
+
+  /**
+   * Calculate growth velocity (change in engagement over time)
+   */
+  private calculateVelocity(playlist: Playlist): number {
+    // Simplified velocity calculation
+    // In production, this would compare current stats with historical data
+    const age = Date.now() - (playlist.timestamp || Date.now());
+    const dayInMs = 24 * 60 * 60 * 1000;
+    const ageInDays = Math.max(1, age / dayInMs);
+    
+    const totalEngagement = (playlist.playCount || 0) + (playlist.likeCount || 0) + (playlist.followerCount || 0);
+    const velocity = totalEngagement / ageInDays;
+    
+    return velocity;
+  }
+
+  /**
+   * Get trending playlists
+   */
+  async getTrendingPlaylists(limit: number = 20): Promise<PlaylistWithScore[]> {
+    try {
+      console.log(`🔥 [PLAYLIST] Getting trending playlists (limit: ${limit})`);
+
+      // Get all public playlists
+      if (!this.sdk || !this.schemaId) {
+        throw new Error('SDK not initialized');
+      }
+
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      const playlists: Playlist[] = [];
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.isPublic && !playlist.isDeleted) {
+              // Get stats for each playlist
+              if (!playlistInteractionService.isConnected()) {
+                await playlistInteractionService.connect();
+              }
+              const stats = await playlistInteractionService.getPlaylistStats(playlist.id);
+              
+              // Merge stats
+              playlist.followers = stats.followers;
+              playlist.followerCount = stats.followerCount;
+              playlist.likeCount = stats.likeCount;
+              playlist.playCount = stats.playCount;
+              
+              playlists.push(playlist);
+            }
+          } catch (error) {
+            // Skip invalid records
+          }
+        }
+      }
+
+      // Calculate trending scores
+      const playlistsWithScores: PlaylistWithScore[] = playlists.map(playlist => {
+        const score = this.calculateTrendingScore(playlist);
+        const velocity = this.calculateVelocity(playlist);
+        
+        return {
+          ...playlist,
+          trendingScore: score,
+          velocity: velocity
+        };
+      });
+
+      // Sort by trending score (descending)
+      playlistsWithScores.sort((a, b) => (b.trendingScore || 0) - (a.trendingScore || 0));
+
+      // Add rank
+      playlistsWithScores.forEach((playlist, index) => {
+        playlist.trendingRank = index + 1;
+      });
+
+      // Return top N
+      const trending = playlistsWithScores.slice(0, limit);
+
+      console.log(`✅ [PLAYLIST] Found ${trending.length} trending playlists`);
+      console.log(`🔥 [PLAYLIST] Top 3:`, trending.slice(0, 3).map(p => ({
+        title: p.title,
+        score: p.trendingScore?.toFixed(2),
+        rank: p.trendingRank
+      })));
+
+      return trending;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to get trending playlists:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get top playlists by specific metric
+   */
+  async getTopPlaylists(
+    metric: 'plays' | 'likes' | 'followers',
+    limit: number = 20
+  ): Promise<Playlist[]> {
+    try {
+      console.log(`📊 [PLAYLIST] Getting top playlists by ${metric} (limit: ${limit})`);
+
+      // Get all public playlists
+      if (!this.sdk || !this.schemaId) {
+        throw new Error('SDK not initialized');
+      }
+
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      const playlists: Playlist[] = [];
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.isPublic && !playlist.isDeleted) {
+              // Get stats
+              if (!playlistInteractionService.isConnected()) {
+                await playlistInteractionService.connect();
+              }
+              const stats = await playlistInteractionService.getPlaylistStats(playlist.id);
+              
+              playlist.followers = stats.followers;
+              playlist.followerCount = stats.followerCount;
+              playlist.likeCount = stats.likeCount;
+              playlist.playCount = stats.playCount;
+              
+              playlists.push(playlist);
+            }
+          } catch (error) {
+            // Skip invalid records
+          }
+        }
+      }
+
+      // Sort by metric
+      playlists.sort((a, b) => {
+        const aValue = metric === 'plays' ? (a.playCount || 0) :
+                      metric === 'likes' ? (a.likeCount || 0) :
+                      (a.followerCount || 0);
+        const bValue = metric === 'plays' ? (b.playCount || 0) :
+                      metric === 'likes' ? (b.likeCount || 0) :
+                      (b.followerCount || 0);
+        return bValue - aValue;
+      });
+
+      const top = playlists.slice(0, limit);
+
+      console.log(`✅ [PLAYLIST] Found ${top.length} top playlists by ${metric}`);
+      return top;
+    } catch (error) {
+      console.error(`❌ [PLAYLIST] Failed to get top playlists by ${metric}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get new/recent playlists
+   */
+  async getNewPlaylists(limit: number = 20): Promise<Playlist[]> {
+    try {
+      console.log(`🆕 [PLAYLIST] Getting new playlists (limit: ${limit})`);
+
+      if (!this.sdk || !this.schemaId) {
+        throw new Error('SDK not initialized');
+      }
+
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      const playlists: Playlist[] = [];
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.isPublic && !playlist.isDeleted) {
+              playlists.push(playlist);
+            }
+          } catch (error) {
+            // Skip invalid records
+          }
+        }
+      }
+
+      // Sort by timestamp (newest first)
+      playlists.sort((a, b) => b.timestamp - a.timestamp);
+
+      const newPlaylists = playlists.slice(0, limit);
+
+      console.log(`✅ [PLAYLIST] Found ${newPlaylists.length} new playlists`);
+      return newPlaylists;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to get new playlists:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Search playlists by title or description
+   */
+  async searchPlaylists(query: string, limit: number = 20): Promise<Playlist[]> {
+    try {
+      console.log(`🔍 [PLAYLIST] Searching playlists: "${query}" (limit: ${limit})`);
+
+      if (!this.sdk || !this.schemaId) {
+        throw new Error('SDK not initialized');
+      }
+
+      const publisherAddress = await this.getPublisherAddress();
+      
+      // ✅ FIX: Use correct SDK method
+      const allData = await this.sdk.streams.getAllPublisherData(
+        publisherAddress as `0x${string}`,
+        this.schemaId
+      );
+
+      const playlists: Playlist[] = [];
+      const searchLower = query.toLowerCase();
+
+      if (allData && Array.isArray(allData)) {
+        for (const item of allData) {
+          try {
+            const playlist = this.parsePlaylistData(item);
+            if (playlist && playlist.isPublic && !playlist.isDeleted) {
+              // Search in title and description
+              const titleMatch = playlist.title.toLowerCase().includes(searchLower);
+              const descMatch = playlist.description.toLowerCase().includes(searchLower);
+              
+              if (titleMatch || descMatch) {
+                playlists.push(playlist);
+              }
+            }
+          } catch (error) {
+            // Skip invalid records
+          }
+        }
+      }
+
+      // Sort by relevance (title match first, then by timestamp)
+      playlists.sort((a, b) => {
+        const aTitle = a.title.toLowerCase().includes(searchLower);
+        const bTitle = b.title.toLowerCase().includes(searchLower);
+        
+        if (aTitle && !bTitle) return -1;
+        if (!aTitle && bTitle) return 1;
+        
+        return b.timestamp - a.timestamp;
+      });
+
+      const results = playlists.slice(0, limit);
+
+      console.log(`✅ [PLAYLIST] Found ${results.length} playlists matching "${query}"`);
+      return results;
+    } catch (error) {
+      console.error('❌ [PLAYLIST] Failed to search playlists:', error);
+      return [];
+    }
+  }
+}
+
+// Export singleton
+export const playlistService = new PlaylistService();
+export default playlistService;

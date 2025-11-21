@@ -44,7 +44,7 @@ export const PlayCountProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     setIsLoading(true);
     try {
-      console.log('🔄 [GlobalPlayCounts] Refreshing play counts for', tokenIds.length, 'tokens');
+      // console.log('🔄 [GlobalPlayCounts] Refreshing play counts for', tokenIds.length, 'tokens');
       
       const counts = await somniaService.getPlayCountsForTokens(tokenIds);
       
@@ -63,7 +63,7 @@ export const PlayCountProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return newSet;
       });
       
-      console.log('✅ [GlobalPlayCounts] Refreshed', counts.size, 'play counts');
+      // console.log('✅ [GlobalPlayCounts] Refreshed', counts.size, 'play counts');
     } catch (error) {
       console.error('❌ [GlobalPlayCounts] Failed to refresh:', error);
     } finally {
@@ -87,7 +87,7 @@ export const PlayCountProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const interval = setInterval(() => {
       const tokenIds = Array.from(trackedTokenIds);
-      console.log('🔄 [GlobalPlayCounts] Auto-refreshing', tokenIds.length, 'tracked tokens');
+      // console.log('🔄 [GlobalPlayCounts] Auto-refreshing', tokenIds.length, 'tracked tokens');
       refreshPlayCounts(tokenIds);
     }, 30000); // 30 seconds
 

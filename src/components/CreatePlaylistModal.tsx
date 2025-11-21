@@ -26,7 +26,9 @@ interface CreatePlaylistModalProps {
     title: string;
     description: string;
     cover: string;
+    coverHash: string;
     isPublic: boolean;
+    trackIds: string[];
     creationMode?: 'manual' | 'ai';
     aiPrompt?: string;
     tracks?: any[];
@@ -40,9 +42,37 @@ const CreatePlaylistModal = ({ isOpen, onClose, onCreate }: CreatePlaylistModalP
   const [description, setDescription] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const [coverUrl, setCoverUrl] = useState("");
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [isUploadingCover, setIsUploadingCover] = useState(false);
   // AI fields
   const [aiPrompt, setAiPrompt] = useState("");
   const [playlistName, setPlaylistName] = useState("");
+
+  // Handle cover image file upload
+  const handleCoverFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image size must be less than 5MB');
+      return;
+    }
+
+    setCoverFile(file);
+    
+    // Create preview URL (blob URL for immediate display)
+    const previewUrl = URL.createObjectURL(file);
+    setCoverUrl(previewUrl);
+    
+    console.log('✅ Cover file selected, will upload on submit');
+  };
 
   const handleAiGenerate = () => {
     if (!aiPrompt.trim()) return;
@@ -109,15 +139,23 @@ const CreatePlaylistModal = ({ isOpen, onClose, onCreate }: CreatePlaylistModalP
     if (creationMode === 'manual' && !title.trim()) return;
     if (creationMode === 'ai' && aiStep !== 'result') return;
 
+    // Prepare track IDs for blockchain storage
+    const trackIds = creationMode === 'ai' 
+      ? generatedTracks.map(t => String(t.id))
+      : [];
+
     const playlistData = {
       title: creationMode === 'manual' ? title.trim() : (playlistName.trim() || `AI Generated: ${aiPrompt.slice(0, 30)}...`),
       description: creationMode === 'manual' ? description.trim() : `Created with HiBeats AI based on: "${aiPrompt}"`,
-      cover: coverUrl || "/api/placeholder/300/300",
+      cover: coverUrl || "/api/placeholder/300/300", // ✅ Pass blob URL or IPFS URL
+      coverHash: '', // Will be set by parent component after IPFS upload
       isPublic,
       creationMode,
+      trackIds, // ✅ Track IDs for blockchain
+      coverFile, // ✅ Pass file for upload
       ...(creationMode === 'ai' && {
         aiPrompt: aiPrompt.trim(),
-        tracks: generatedTracks
+        tracks: generatedTracks // Full track data for UI
       })
     };
 
@@ -130,6 +168,7 @@ const CreatePlaylistModal = ({ isOpen, onClose, onCreate }: CreatePlaylistModalP
     setDescription("");
     setIsPublic(true);
     setCoverUrl("");
+    setCoverFile(null);
     setAiPrompt("");
     setPlaylistName("");
   };
@@ -186,18 +225,27 @@ const CreatePlaylistModal = ({ isOpen, onClose, onCreate }: CreatePlaylistModalP
                       <ImageIcon className="w-8 h-8 text-muted-foreground" />
                     )}
                   </div>
+                  <input
+                    type="file"
+                    id="cover-upload"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleCoverFileChange}
+                    disabled={isUploadingCover}
+                  />
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
                     className="absolute -bottom-2 -right-2 w-8 h-8 p-0 rounded-full"
-                    onClick={() => {
-                      // In a real app, this would open a file picker
-                      const url = prompt("Enter cover image URL:");
-                      if (url) setCoverUrl(url);
-                    }}
+                    onClick={() => document.getElementById('cover-upload')?.click()}
+                    disabled={isUploadingCover}
                   >
-                    <Upload className="w-4 h-4" />
+                    {isUploadingCover ? (
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
                   </Button>
                 </div>
                 <div className="flex-1">

@@ -6,6 +6,7 @@ import { Send, Loader2, AtSign, AlertCircle } from "lucide-react";
 import { useSomniaDatastream } from "@/contexts/SomniaDatastreamContext";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
 import { useAccount } from "wagmi";
+import { useLiveIndicators } from "@/hooks/useLiveIndicators";
 
 interface CommentInputProps {
   onSubmit: (comment: string) => void;
@@ -32,6 +33,9 @@ const CommentInput = ({
 }: CommentInputProps) => {
   const { readAllUserProfiles, isConnected, recentEvents } = useSomniaDatastream();
   const { address } = useAccount();
+  
+  // ⌨️ Live typing indicator
+  const { updateTyping } = useLiveIndicators(postId || '');
   
   const [commentText, setCommentText] = useState("");
   const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
@@ -181,6 +185,10 @@ const CommentInput = ({
   const handleTextChange = (newText: string) => {
     setCommentText(newText);
 
+    // ⌨️ Update typing indicator
+    const isTyping = newText.trim().length > 0;
+    updateTyping(isTyping);
+
     const input = inputRef.current;
     if (input) {
       const cursorPos = input.selectionStart || 0;
@@ -317,6 +325,7 @@ const CommentInput = ({
             value={commentText}
             onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onBlur={() => updateTyping(false)}
             autoFocus={autoFocus}
             className="flex-1 px-3 py-2 bg-muted/50 border border-border/20 rounded-full text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={disabled || isSubmitting}

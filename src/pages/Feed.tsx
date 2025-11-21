@@ -51,6 +51,8 @@ import TipModal from "@/components/TipModal";
 import { NetworkStatus } from "@/components/NetworkStatus";
 import { TransactionQueueStatus } from "@/components/TransactionQueueStatus";
 import RightSidebar from "@/components/RightSidebar";
+import { LiveIndicators } from "@/components/LiveIndicators";
+import { RealtimeLeaderboard, DatastreamPerformanceMetrics } from "@/components/RealtimeLeaderboard";
 import { useAudio } from "@/contexts/AudioContext";
 import { useSequence } from "@/contexts/SequenceContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -65,6 +67,7 @@ import { SOMNIA_CONFIG_V3, PostDataV3, InteractionDataV3, ContentType, Interacti
 import { createPublicClient, http } from 'viem';
 import { defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { useWalletClient } from 'wagmi'; // ✅ Add wallet client hook
 
 export interface Comment {
   id: number | string;
@@ -155,10 +158,11 @@ const formatPostForUI = (post: any) => {
 
 const Feed = () => {
   const { currentTrack, isPlaying, playTrack, pauseTrack, addToPlaylist, isAudioReady, resumeTrack } = useAudio();
-  const { smartAccountAddress, isAccountReady, address } = useSequence();
+  const { smartAccountAddress, isAccountReady } = useSequence();
   const { toast } = useToast();
   const { userProfile, isAuthenticated } = useAuth();
   const { profileData: currentUserProfile } = useCurrentUserProfile();
+  const { data: walletClient } = useWalletClient(); // ✅ Get user's wallet
   
   // 💾 Cache & Optimistic Updates Hook
   const socialCache = useSocialCache();
@@ -1132,8 +1136,8 @@ const Feed = () => {
         tipAmount: 0,
       };
       
-      // ⚡ Write to blockchain using V3 service (immediate)
-      await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+      // ⚡ Write to blockchain using V3 service with user wallet (immediate)
+      await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
       
       // 🔔 Send notification to post author
       const post = posts.find(p => p.id === postId);
@@ -1196,8 +1200,8 @@ const Feed = () => {
         tipAmount: 0,
       };
       
-      // ⚡ Write to blockchain using V3 service (immediate)
-      await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+      // ⚡ Write to blockchain using V3 service with user wallet (immediate)
+      await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
       
       // Silent success - no toast for clean UX
       // Reload feed after blockchain confirmation
@@ -1254,8 +1258,8 @@ const Feed = () => {
             tipAmount: 0,
           };
 
-          // ⚡ Write to blockchain using V3 service (immediate)
-          const txHash = await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+          // ⚡ Write to blockchain using V3 service with user wallet (immediate)
+          const txHash = await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
           
           // 🔔 Send repost notification (only when reposting, not unreposting)
           if (!isReposted && post.author && post.author.toLowerCase() !== smartAccountAddress.toLowerCase()) {
@@ -1413,7 +1417,7 @@ const Feed = () => {
         description: "Please wait",
       });
 
-      await somniaDatastreamServiceV3.createPost(postData, true); // immediate = true
+      await somniaDatastreamServiceV3.createPost(postData, true, walletClient); // immediate = true, userWallet
 
       toast({
         title: "✅ Quote posted!",
@@ -1504,8 +1508,8 @@ const Feed = () => {
             tipAmount: 0,
           };
 
-          // ⚡ Write to blockchain using V3 service (immediate)
-          const txHash = await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+          // ⚡ Write to blockchain using V3 service with user wallet (immediate)
+          const txHash = await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
           
           // Silent success - no toast for clean UX
           // Reload feed after blockchain confirmation
@@ -1761,8 +1765,8 @@ const Feed = () => {
                       index: 0,
                     };
 
-                    // ⚡ Publish to blockchain using V3 service
-                    await somniaDatastreamServiceV3.createPost(postData, true); // immediate = true
+                    // ⚡ Publish to blockchain using V3 service with user wallet
+                    await somniaDatastreamServiceV3.createPost(postData, true, walletClient); // immediate = true, userWallet
 
                     // Silent success - no toast for clean UX
                     // Reload feed after blockchain confirmation
@@ -2160,7 +2164,7 @@ const Feed = () => {
                           const duration = typeof track.duration === 'string' 
                             ? parseInt(track.duration.split(':')[0]) * 60 + parseInt(track.duration.split(':')[1] || '0')
                             : track.duration || 180;
-                          recordMusicPlay(track, address, duration, 'feed');
+                          recordMusicPlay(track, smartAccountAddress || '', duration, 'feed');
                         }
                       }}
                     >
@@ -2359,7 +2363,7 @@ const Feed = () => {
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
-                                commentOnPost(selectedPost!.id.toString(), comment.id.toString());
+                                handleAddComment(selectedPost!.id.toString(), commentInputs[comment.id.toString()] || '');
                               }
                             }}
                             className="flex-1 px-4 py-3 bg-muted/50 border border-border/20 rounded-full text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
@@ -2367,7 +2371,7 @@ const Feed = () => {
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => commentOnPost(selectedPost!.id.toString(), comment.id.toString())}
+                            onClick={() => handleAddComment(selectedPost!.id.toString(), commentInputs[comment.id.toString()] || '')}
                             disabled={!commentInputs[comment.id.toString()]?.trim()}
                             className="px-4 rounded-full"
                           >
@@ -2409,7 +2413,7 @@ const Feed = () => {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
                           e.preventDefault();
-                          commentOnPost(selectedPost!.id.toString());
+                          handleAddComment(selectedPost!.id.toString(), commentInputs[selectedPost?.id.toString() || ''] || '');
                         }
                       }}
                       className="flex-1 px-4 py-3 bg-muted/50 border border-border/20 rounded-full text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
@@ -2417,7 +2421,7 @@ const Feed = () => {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => commentOnPost(selectedPost!.id.toString())}
+                      onClick={() => handleAddComment(selectedPost!.id.toString(), commentInputs[selectedPost?.id.toString() || ''] || '')}
                       disabled={!commentInputs[selectedPost?.id.toString() || '']?.trim()}
                       className="px-4 rounded-full"
                     >

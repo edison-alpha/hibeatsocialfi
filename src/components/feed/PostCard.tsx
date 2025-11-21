@@ -48,6 +48,7 @@ import CommentInput from '@/components/CommentInput';
 import { parseContentWithMentionsAndTags } from '@/utils/textParser';
 import { OptimizedImage } from '@/components/OptimizedImage';
 import { OptimizedVideo } from '@/components/OptimizedVideo';
+import { LiveIndicators } from '@/components/LiveIndicators';
 import { recordMusicPlay } from '@/utils/playCountHelper';
 import TipModal from '@/components/TipModal';
 import { toast } from 'sonner';
@@ -636,19 +637,19 @@ const PostCard: React.FC<PostCardProps> = ({
       }
     }
     
-    // Debug log
-    console.log('🔍 PostCard rendering:', {
-      id: post.id,
-      contentType: post.contentType,
-      hasMetadata: !!parsedMetadata,
-      metadataType: typeof parsedMetadata,
-      metadataKeys: parsedMetadata ? Object.keys(parsedMetadata) : [],
-      tokenId: parsedMetadata?.tokenId, // ✅ ADD: Log tokenId explicitly
-      hasAttachments: !!parsedMetadata?.attachments,
-      attachmentsCount: parsedMetadata?.attachments?.length || 0,
-      attachments: parsedMetadata?.attachments,
-      fullMetadata: parsedMetadata
-    });
+    // Debug log (disabled for production)
+    // console.log('🔍 PostCard rendering:', {
+    //   id: post.id,
+    //   contentType: post.contentType,
+    //   hasMetadata: !!parsedMetadata,
+    //   metadataType: typeof parsedMetadata,
+    //   metadataKeys: parsedMetadata ? Object.keys(parsedMetadata) : [],
+    //   tokenId: parsedMetadata?.tokenId,
+    //   hasAttachments: !!parsedMetadata?.attachments,
+    //   attachmentsCount: parsedMetadata?.attachments?.length || 0,
+    //   attachments: parsedMetadata?.attachments,
+    //   fullMetadata: parsedMetadata
+    // });
   }
 
   // Use parsed metadata for rendering
@@ -892,15 +893,15 @@ const PostCard: React.FC<PostCardProps> = ({
                     const url = hash 
                       ? `https://ipfs.io/ipfs/${hash}` 
                       : metadata.imageUrl || '/assets/default-cover.jpg';
-                    console.log('🖼️ [PostCard Music] Image:', { 
-                      title: metadata.title,
-                      ipfsImageHash: metadata.ipfsImageHash,
-                      ipfsArtworkHash: metadata.ipfsArtworkHash,
-                      cleanHash: hash,
-                      imageUrl: metadata.imageUrl,
-                      finalUrl: url,
-                      metadata: metadata
-                    });
+                    // console.log('🖼️ [PostCard Music] Image:', { 
+                    //   title: metadata.title,
+                    //   ipfsImageHash: metadata.ipfsImageHash,
+                    //   ipfsArtworkHash: metadata.ipfsArtworkHash,
+                    //   cleanHash: hash,
+                    //   imageUrl: metadata.imageUrl,
+                    //   finalUrl: url,
+                    //   metadata: metadata
+                    // });
                     return url;
                   })()}
                   alt={metadata.title || 'Music'}
@@ -1768,7 +1769,10 @@ const PostCard: React.FC<PostCardProps> = ({
 
         {/* Comment Input */}
         {showCommentInput && (
-          <div className="pt-3 border-t">
+          <div className="pt-3 border-t space-y-3">
+            {/* Live Indicators - View Count & Typing */}
+            <LiveIndicators postId={post?.id || ''} />
+            
             <CommentInput
               onSubmit={handleCommentSubmit}
               isSubmitting={isSubmittingComment}

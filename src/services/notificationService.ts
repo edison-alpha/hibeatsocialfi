@@ -231,14 +231,14 @@ class NotificationService {
           // Filter by toUser
           const matches = n.toUser.toLowerCase() === userAddress.toLowerCase();
           
-          if (matches) {
-            console.log('✅ [NOTIF] Match found:', {
-              type: n.notificationType,
-              from: n.fromUser.slice(0, 10),
-              to: n.toUser.slice(0, 10),
-              timestamp: new Date(n.timestamp).toLocaleString()
-            });
-          }
+          // if (matches) {
+          //   console.log('✅ [NOTIF] Match found:', {
+          //     type: n.notificationType,
+          //     from: n.fromUser.slice(0, 10),
+          //     to: n.toUser.slice(0, 10),
+          //     timestamp: new Date(n.timestamp).toLocaleString()
+          //   });
+          // }
           
           return matches;
         })
@@ -269,7 +269,7 @@ class NotificationService {
     }
   }
 
-  // Create and send a notification
+  // Create and send a notification (✅ MULTI-PUBLISHER SUPPORT)
   async sendNotification(
     type: NotificationType,
     fromUser: string,
@@ -278,6 +278,7 @@ class NotificationService {
       postId?: string;
       content?: string;
       metadata?: NotificationMetadata;
+      walletClient?: any; // ✅ NEW: Optional wallet client for user wallet
     } = {}
   ): Promise<boolean> {
     console.log(`🔔 [NOTIF] Sending ${type} notification:`, { fromUser, toUser, postId: options.postId });
@@ -285,6 +286,12 @@ class NotificationService {
     try {
       const timestamp = Date.now();
       const notificationId = `notif_${type}_${timestamp}_${fromUser}_${toUser}`;
+      
+      // ✅ Determine which wallet to use
+      const useUserWallet = !!options.walletClient;
+      const walletType = useUserWallet ? 'USER' : 'SERVER';
+      
+      console.log(`🔔 [NOTIF] Using ${walletType} wallet for notification`);
       
       // ✅ FIX: Use correct data format matching schema
       // Schema: uint256 timestamp, string notificationType, string fromUser, string toUser, string postId, string content, string metadata, bool isRead
@@ -302,15 +309,29 @@ class NotificationService {
       
       console.log('📤 [NOTIF] Publishing notification data:', notificationData);
       
-      // Use datastream service to publish notification
-      const txHash = await somniaDatastreamService.publishToSchema(
-        NOTIFICATION_SCHEMA_ID,
-        notificationData
-      );
+      // ✅ Use datastream service with wallet client if provided
+      let txHash: string | undefined;
+      
+      if (useUserWallet) {
+        // Use v3 service for user wallet
+        const { somniaDatastreamServiceV3 } = await import('@/services/somniaDatastreamService.v3');
+        txHash = await somniaDatastreamServiceV3.publishToSchema(
+          NOTIFICATION_SCHEMA_ID,
+          notificationData,
+          options.walletClient
+        );
+      } else {
+        // Use regular service for server wallet
+        txHash = await somniaDatastreamService.publishToSchema(
+          NOTIFICATION_SCHEMA_ID,
+          notificationData
+        );
+      }
 
       if (txHash) {
         console.log(`✅ [NOTIF] Notification sent: ${type} from ${fromUser.slice(0,6)}... to ${toUser.slice(0,6)}...`);
         console.log(`   TX: ${txHash}`);
+        console.log(`   Wallet: ${walletType}`);
         
         // Clear cache for recipient to force refresh
         this.clearCache(toUser);
@@ -694,60 +715,62 @@ class NotificationService {
     console.log('🔌 Notification service disconnected');
   }
 
-  // Helper methods for specific notification types
-  async notifyLike(fromUser: string, toUser: string, postId: string, metadata?: NotificationMetadata): Promise<boolean> {
-    return this.sendNotification('like', fromUser, toUser, { postId, metadata });
+  // Helper methods for specific notification types (✅ MULTI-PUBLISHER SUPPORT)
+  async notifyLike(fromUser: string, toUser: string, postId: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
+    return this.sendNotification('like', fromUser, toUser, { postId, metadata, walletClient });
   }
 
-  async notifyComment(fromUser: string, toUser: string, postId: string, content: string, metadata?: NotificationMetadata): Promise<boolean> {
-    return this.sendNotification('comment', fromUser, toUser, { postId, content, metadata });
+  async notifyComment(fromUser: string, toUser: string, postId: string, content: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
+    return this.sendNotification('comment', fromUser, toUser, { postId, content, metadata, walletClient });
   }
 
-  async notifyRepost(fromUser: string, toUser: string, postId: string, metadata?: NotificationMetadata): Promise<boolean> {
-    return this.sendNotification('repost', fromUser, toUser, { postId, metadata });
+  async notifyRepost(fromUser: string, toUser: string, postId: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
+    return this.sendNotification('repost', fromUser, toUser, { postId, metadata, walletClient });
   }
 
-  async notifyFollow(fromUser: string, toUser: string, metadata?: NotificationMetadata): Promise<boolean> {
-    return this.sendNotification('follow', fromUser, toUser, { metadata });
+  async notifyFollow(fromUser: string, toUser: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
+    return this.sendNotification('follow', fromUser, toUser, { metadata, walletClient });
   }
 
-  async notifyMention(fromUser: string, toUser: string, postId: string, content: string, metadata?: NotificationMetadata): Promise<boolean> {
-    return this.sendNotification('mention', fromUser, toUser, { postId, content, metadata });
+  async notifyMention(fromUser: string, toUser: string, postId: string, content: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
+    return this.sendNotification('mention', fromUser, toUser, { postId, content, metadata, walletClient });
   }
 
-  async notifyTip(fromUser: string, toUser: string, postId: string, amount: string, metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyTip(fromUser: string, toUser: string, postId: string, amount: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, amount };
-    return this.sendNotification('tip', fromUser, toUser, { postId, metadata: meta });
+    return this.sendNotification('tip', fromUser, toUser, { postId, metadata: meta, walletClient });
   }
 
-  async notifyReceivedSomi(fromUser: string, toUser: string, amount: string, txHash?: string, metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyReceivedSomi(fromUser: string, toUser: string, amount: string, txHash?: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, amount, txHash };
-    return this.sendNotification('received_somi', fromUser, toUser, { metadata: meta });
+    return this.sendNotification('received_somi', fromUser, toUser, { metadata: meta, walletClient });
   }
 
-  async notifyNftMinted(owner: string, tokenId: string, metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyNftMinted(owner: string, tokenId: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, tokenId };
-    return this.sendNotification('nft_minted', owner, owner, { metadata: meta });
+    return this.sendNotification('nft_minted', owner, owner, { metadata: meta, walletClient });
   }
 
-  async notifyMusicGenerated(owner: string, taskId: string, title: string, metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyMusicGenerated(owner: string, taskId: string, title: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, taskId, title };
-    return this.sendNotification('music_generated', owner, owner, { metadata: meta });
+    return this.sendNotification('music_generated', owner, owner, { metadata: meta, walletClient });
   }
 
-  async notifyMusicMilestonePlays(artist: string, tokenId: string, playCount: number, milestone: string, metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyMusicMilestonePlays(artist: string, tokenId: string, playCount: number, milestone: string, metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, tokenId, playCount: playCount.toString(), milestone };
     return this.sendNotification('music_milestone_plays', artist, artist, { 
       content: `${playCount} plays`, 
-      metadata: meta 
+      metadata: meta,
+      walletClient
     });
   }
 
-  async notifyMusicTopChart(artist: string, tokenId: string, rank: number, chartType: string = 'Top 100', metadata?: NotificationMetadata): Promise<boolean> {
+  async notifyMusicTopChart(artist: string, tokenId: string, rank: number, chartType: string = 'Top 100', metadata?: NotificationMetadata, walletClient?: any): Promise<boolean> {
     const meta = { ...metadata, tokenId, rank: rank.toString(), chartType };
     return this.sendNotification('music_top_chart', artist, artist, { 
       content: `${chartType} - Rank #${rank}`, 
-      metadata: meta 
+      metadata: meta,
+      walletClient
     });
   }
 }

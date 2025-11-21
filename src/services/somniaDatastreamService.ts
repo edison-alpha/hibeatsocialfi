@@ -1457,6 +1457,45 @@ class SomniaDatastreamService {
     return Array.from(schemaData!.values());
   }
 
+  // ✅ Get user notifications (for backward compatibility with notificationService)
+  async getUserNotifications(userAddress: string, limit: number = 50, useCache: boolean = true): Promise<any[]> {
+    try {
+      console.log(`🔔 [DATASTREAM] Getting notifications for ${userAddress.slice(0, 10)}...`);
+      
+      // Get publisher address (private key account)
+      const privateKey = import.meta.env.VITE_PRIVATE_KEY;
+      if (!privateKey) {
+        console.error('❌ [DATASTREAM] No private key found');
+        return [];
+      }
+      
+      const account = privateKeyToAccount(privateKey as `0x${string}`);
+      const publisherAddress = account.address;
+      
+      // Get all notifications from publisher
+      const allNotifications = await this.getAllPublisherDataForSchema(
+        'hibeats_notifications_v1',
+        publisherAddress
+      );
+      
+      if (!allNotifications || allNotifications.length === 0) {
+        return [];
+      }
+      
+      // Filter by toUser and sort by timestamp
+      const userNotifications = allNotifications
+        .filter((notif: any) => notif.toUser?.toLowerCase() === userAddress.toLowerCase())
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, limit);
+      
+      console.log(`✅ [DATASTREAM] Found ${userNotifications.length} notifications`);
+      return userNotifications;
+    } catch (error) {
+      console.error('❌ [DATASTREAM] Failed to get notifications:', error);
+      return [];
+    }
+  }
+
   // ✅ Subscribe to real-time schema updates via WebSocket
   async subscribeToSchemaUpdates(
     schemaId: string,

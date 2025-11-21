@@ -19,6 +19,7 @@ import Navbar from "@/components/Navbar";
 import { useSequence } from "@/contexts/SequenceContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAudio } from "@/contexts/AudioContext";
+import { useWalletClient } from 'wagmi'; // ✅ Add wallet client hook
 import { useCurrentUserProfile } from "@/hooks/useRealTimeProfile";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import { somniaDatastreamServiceV3 } from "@/services/somniaDatastreamService.v3";
@@ -29,6 +30,7 @@ import { SOMNIA_CONFIG_V3, InteractionType, TargetType, createCommentId, createI
 import { privateKeyToAccount } from 'viem/accounts';
 import { toast } from "sonner";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
+import { LiveIndicators } from "@/components/LiveIndicators";
 import {
   Heart,
   MessageCircle,
@@ -83,6 +85,7 @@ const PostDetail = () => {
   const { profileData: currentUserProfile } = useCurrentUserProfile();
   const { currentTrack, isPlaying, playTrack, pauseTrack, currentTime, duration: audioDuration } = useAudio();
   const { isBookmarked: checkIsBookmarked, toggleBookmark } = useBookmarks();
+  const { data: walletClient } = useWalletClient(); // ✅ Get user's wallet
   
   const privateKey = import.meta.env.VITE_PRIVATE_KEY;
   const privateKeyAddress = privateKey ? privateKeyToAccount(privateKey as `0x${string}`).address : null;
@@ -225,8 +228,8 @@ const PostDetail = () => {
         tipAmount: 0,
       };
       
-      // Write to blockchain using V3 service
-      await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+      // ✅ Write to blockchain using V3 service with user wallet
+      await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
       
       toast.success(wasLiked ? "Like removed" : "Post liked! ❤️");
       
@@ -369,7 +372,8 @@ const PostDetail = () => {
         };
         
         try {
-          await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+          // ✅ Write to blockchain using V3 service with user wallet
+          await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
           toast.success(wasReposted ? "Repost removed" : "Reposted!");
           
           // 🔄 Reload post in background after blockchain confirmation (no skeleton)
@@ -519,8 +523,8 @@ const PostDetail = () => {
         tipAmount: 0,
       };
       
-      // Write to blockchain using V3 service
-      await somniaDatastreamServiceV3.createInteraction(interactionData, true);
+      // ✅ Write to blockchain using V3 service with user wallet
+      await somniaDatastreamServiceV3.createInteraction(interactionData, true, walletClient);
       
       toast.success("Comment posted!");
       
@@ -1028,6 +1032,22 @@ const PostDetail = () => {
     }
   }, [postId, privateKeyAddress, smartAccountAddress, isAccountReady]);
 
+  // Track view when post loads
+  useEffect(() => {
+    if (post && smartAccountAddress) {
+      // Register view for this post
+      const registerView = async () => {
+        try {
+          console.log(`👁️ [POST-DETAIL] Registering view for post ${post.id}`);
+          // View will be registered by LiveIndicators component
+        } catch (error) {
+          console.error('❌ [POST-DETAIL] Failed to register view:', error);
+        }
+      };
+      registerView();
+    }
+  }, [post?.id, smartAccountAddress]);
+
 
 
   if (isLoading) {
@@ -1132,6 +1152,9 @@ const PostDetail = () => {
                           <span>·</span>
                           <span>{formatTimeAgo(post.timestamp)}</span>
                         </div>
+                        
+                        {/* Live Indicators - Real-time typing and view counts */}
+                        <LiveIndicators postId={String(post.id)} className="mt-2" />
                       </div>
                     </div>
 

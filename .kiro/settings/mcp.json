@@ -1,10 +1,13 @@
 {
   "mcpServers": {
     "somnia-docs": {
-      "type": "http",
       "url": "https://docs.somnia.network/~gitbook/mcp",
       "disabled": false,
-      "autoApprove": []
+      "autoApprove": [
+        "searchDocumentation",
+        "searchDocumentation",
+        "searchDocumentation"
+      ]
     }
   }
 }

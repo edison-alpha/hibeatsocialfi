@@ -1,10 +1,16 @@
-// React Hook for Notifications
+// React Hook for Notifications with Real-Time Support (✅ MULTI-PUBLISHER SUPPORT)
 import { useState, useEffect, useCallback } from 'react';
 import { notificationService, type Notification, type NotificationType } from '@/services/notificationService';
+import { realtimeNotificationService } from '@/services/notificationService.realtime';
 import { useAccount } from 'wagmi';
+import { useSequence } from '@/contexts/SequenceContext';
+
+// Use real-time service if available, fallback to regular service
+const activeNotificationService = realtimeNotificationService || notificationService;
 
 export function useNotifications() {
   const { address } = useAccount();
+  const { walletClient, smartAccountAddress } = useSequence(); // ✅ Get wallet client for multi-publisher
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -14,10 +20,9 @@ export function useNotifications() {
   useEffect(() => {
     const connectService = async () => {
       try {
-        console.log('🔔 [HOOK] Connecting notification service...');
-        await notificationService.connect();
+        await activeNotificationService.connect();
         setIsConnected(true);
-        console.log('✅ [HOOK] Notification service connected');
+        console.log('✅ [HOOK] Real-time notification service connected');
       } catch (error) {
         console.error('❌ [HOOK] Failed to connect notification service:', error);
       }
@@ -33,11 +38,10 @@ export function useNotifications() {
       return;
     }
 
-    console.log('🔔 [HOOK] Loading notifications for:', address.slice(0, 10) + '...');
     setLoading(true);
     try {
-      const data = await notificationService.getUserNotifications(address);
-      console.log('🔔 [HOOK] Loaded notifications:', data.length);
+      const data = await activeNotificationService.getUserNotifications(address);
+      console.log(`🔔 [HOOK] Loaded ${data.length} notifications (${data.filter(n => !n.isRead).length} unread)`);
       setNotifications(data);
       setUnreadCount(data.filter(n => !n.isRead).length);
     } catch (error) {
@@ -47,31 +51,25 @@ export function useNotifications() {
     }
   }, [address, isConnected]);
 
-  // Subscribe to real-time updates
+  // Subscribe to real-time updates (WebSocket, not polling!)
   useEffect(() => {
     if (!address || !isConnected) return;
 
-    console.log('🔔 [HOOK] Setting up real-time subscription...');
     loadNotifications();
 
-    const subscriptionId = notificationService.subscribeToUserNotifications(
+    const subscriptionId = activeNotificationService.subscribeToUserNotifications(
       address,
       (newNotification) => {
+        console.log('🔔 [HOOK] Real-time notification received:', newNotification.notificationType);
         setNotifications(prev => [newNotification, ...prev]);
         setUnreadCount(prev => prev + 1);
         
-        // Show browser notification if permission granted
-        if (Notification.permission === 'granted') {
-          new Notification('HiBeats', {
-            body: getNotificationText(newNotification),
-            icon: '/favicon.ico',
-          });
-        }
+        // Browser notification is handled by service
       }
     );
 
     return () => {
-      notificationService.unsubscribe(subscriptionId);
+      activeNotificationService.unsubscribe(subscriptionId);
     };
   }, [address, loadNotifications]);
 
@@ -84,7 +82,7 @@ export function useNotifications() {
 
   // Mark notification as read
   const markAsRead = async (notificationId: string) => {
-    await notificationService.markAsRead(notificationId);
+    await activeNotificationService.markAsRead(notificationId);
     setNotifications(prev =>
       prev.map(n => (n.id === notificationId ? { ...n, isRead: true } : n))
     );
@@ -95,104 +93,104 @@ export function useNotifications() {
   const markAllAsRead = async () => {
     if (!address) return;
     
-    await notificationService.markAllAsRead(address);
+    await activeNotificationService.markAllAsRead(address);
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
     setUnreadCount(0);
   };
 
-  // Send notification helpers - Social
+  // Send notification helpers - Social (✅ MULTI-PUBLISHER SUPPORT)
   const sendLikeNotification = async (toUser: string, postId: string) => {
-    if (!address) return false;
-    return notificationService.notifyLike(address, toUser, postId);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyLike(smartAccountAddress, toUser, postId, undefined, walletClient);
   };
 
   const sendCommentNotification = async (toUser: string, postId: string, content: string) => {
-    if (!address) return false;
-    return notificationService.notifyComment(address, toUser, postId, content);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyComment(smartAccountAddress, toUser, postId, content, undefined, walletClient);
   };
 
   const sendRepostNotification = async (toUser: string, postId: string) => {
-    if (!address) return false;
-    return notificationService.notifyRepost(address, toUser, postId);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyRepost(smartAccountAddress, toUser, postId, undefined, walletClient);
   };
 
   const sendFollowNotification = async (toUser: string) => {
-    if (!address) return false;
-    return notificationService.notifyFollow(address, toUser);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyFollow(smartAccountAddress, toUser, undefined, walletClient);
   };
 
   const sendMentionNotification = async (toUser: string, postId: string, content: string) => {
-    if (!address) return false;
-    return notificationService.notifyMention(address, toUser, postId, content);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyMention(smartAccountAddress, toUser, postId, content, undefined, walletClient);
   };
 
   const sendTipNotification = async (toUser: string, postId: string, amount: string) => {
-    if (!address) return false;
-    return notificationService.notifyTip(address, toUser, postId, amount);
+    if (!smartAccountAddress) return false;
+    return activeNotificationService.notifyTip(smartAccountAddress, toUser, postId, amount, undefined, walletClient);
   };
 
-  // Send notification helpers - Financial
+  // Send notification helpers - Financial (✅ MULTI-PUBLISHER SUPPORT)
   const sendReceivedSomiNotification = async (fromUser: string, amount: string, txHash?: string) => {
-    if (!address) return false;
-    return notificationService.notifyReceivedSomi(fromUser, address, amount, txHash);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyReceivedSomi(fromUser, smartAccountAddress, amount, txHash, undefined, walletClient);
   };
 
-  // Send notification helpers - NFT
+  // Send notification helpers - NFT (✅ MULTI-PUBLISHER SUPPORT)
   const sendNftMintedNotification = async (tokenId: string, metadata?: any) => {
-    if (!address) return false;
-    return notificationService.notifyNftMinted(address, tokenId, metadata);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyNftMinted(smartAccountAddress, tokenId, metadata, walletClient);
   };
 
   const sendNftSoldNotification = async (buyer: string, tokenId: string, price: string) => {
-    if (!address) return false;
-    return notificationService.notifyNftSold(address, buyer, tokenId, price);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyNftSold(smartAccountAddress, buyer, tokenId, price, undefined, walletClient);
   };
 
   const sendNftBoughtNotification = async (seller: string, tokenId: string, price: string) => {
-    if (!address) return false;
-    return notificationService.notifyNftBought(address, seller, tokenId, price);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyNftBought(smartAccountAddress, seller, tokenId, price, undefined, walletClient);
   };
 
   const sendNftOfferNotification = async (toUser: string, tokenId: string, offerAmount: string) => {
-    if (!address) return false;
-    return notificationService.notifyNftOffer(address, toUser, tokenId, offerAmount);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyNftOffer(smartAccountAddress, toUser, tokenId, offerAmount, undefined, walletClient);
   };
 
-  // Send notification helpers - Music
+  // Send notification helpers - Music (✅ MULTI-PUBLISHER SUPPORT)
   const sendMusicGeneratedNotification = async (taskId: string, title: string) => {
-    if (!address) return false;
-    return notificationService.notifyMusicGenerated(address, taskId, title);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicGenerated(smartAccountAddress, taskId, title, undefined, walletClient);
   };
 
   const sendMusicPlayedNotification = async (artist: string, tokenId: string) => {
-    if (!address) return false;
-    return notificationService.notifyMusicPlayed(address, artist, tokenId);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicPlayed(smartAccountAddress, artist, tokenId, undefined, walletClient);
   };
 
-  // Send notification helpers - Music Milestones
+  // Send notification helpers - Music Milestones (✅ MULTI-PUBLISHER SUPPORT)
   const sendMusicMilestonePlaysNotification = async (tokenId: string, playCount: number, milestone: string) => {
-    if (!address) return false;
-    return notificationService.notifyMusicMilestonePlays(address, tokenId, playCount, milestone);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicMilestonePlays(smartAccountAddress, tokenId, playCount, milestone, undefined, walletClient);
   };
 
   const sendMusicMilestoneListenersNotification = async (tokenId: string, listenerCount: number, milestone: string) => {
-    if (!address) return false;
-    return notificationService.notifyMusicMilestoneListeners(address, tokenId, listenerCount, milestone);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicMilestoneListeners(smartAccountAddress, tokenId, listenerCount, milestone, undefined, walletClient);
   };
 
   const sendMusicTrendingNotification = async (tokenId: string, rank: number) => {
-    if (!address) return false;
-    return notificationService.notifyMusicTrending(address, tokenId, rank);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicTrending(smartAccountAddress, tokenId, rank, undefined, walletClient);
   };
 
   const sendMusicTopChartNotification = async (tokenId: string, rank: number, chartType: string = 'Top 100') => {
-    if (!address) return false;
-    return notificationService.notifyMusicTopChart(address, tokenId, rank, chartType);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicTopChart(smartAccountAddress, tokenId, rank, chartType, undefined, walletClient);
   };
 
   const sendMusicViralNotification = async (tokenId: string, viralScore: number) => {
-    if (!address) return false;
-    return notificationService.notifyMusicViral(address, tokenId, viralScore);
+    if (!smartAccountAddress) return false;
+    return notificationService.notifyMusicViral(smartAccountAddress, tokenId, viralScore, undefined, walletClient);
   };
 
   return {

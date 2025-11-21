@@ -18,7 +18,12 @@
     "verify:schemas": "npx tsx scripts/verifyAllSchemas.ts",
     "register:bxp": "npx tsx scripts/registerBXPSchemas.ts",
     "test:bxp": "npx tsx scripts/testBXPSystem.ts",
-    "test:mention": "npx tsx scripts/testMentionNotification.ts"
+    "test:mention": "npx tsx scripts/testMentionNotification.ts",
+    "test:realtime": "npx tsx scripts/testRealtimeFeatures.ts",
+    "test:realtime:all": "npx tsx scripts/testRealtimeFeatures.ts all",
+    "register:live-schema": "npx tsx scripts/registerLiveIndicatorsSchema.ts",
+    "test:playlist": "npx tsx scripts/testPlaylistCRUD.ts",
+    "test:playlist:features": "npx tsx scripts/testPlaylistFeatures.ts"
   },
   "dependencies": {
     "@0xsequence/connect": "^5.3.29",
@@ -66,6 +71,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.2.3",
     "embla-carousel-react": "^8.6.0",
     "emoji-picker-react": "^4.15.0",
     "ethers": "^6.13.0",

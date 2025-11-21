@@ -34,6 +34,7 @@ import { useSomniaDatastream } from "@/contexts/SomniaDatastreamContext";
 import { CONTRACT_ADDRESSES } from "@/lib/web3-config";
 import { ipfsService } from "@/services/ipfsService";
 import { toast } from "sonner";
+import { useWalletClient } from "wagmi";
 
 interface PostComposerProps {
   onPost: (content: string, attachments: any[]) => void;
@@ -44,6 +45,7 @@ interface PostComposerProps {
 const PostComposer = ({ onPost, placeholder = "What's happening in music?", className }: PostComposerProps) => {
   const { isAccountReady, smartAccountAddress } = useSequence();
   const { profileData: currentUserProfile, avatarUrl, displayName, loading: profileLoading } = useCurrentUserProfile();
+  const { data: walletClient } = useWalletClient();
   const [content, setContent] = useState("");
   const [attachments, setAttachments] = useState<any[]>([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -329,7 +331,7 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
       return '';
     }
     
-    console.log('🖼️ Processing avatar hash:', currentUserProfile.avatarHash);
+    // console.log('🖼️ Processing avatar hash:', currentUserProfile.avatarHash);
     
     // If it's already a full URL, return as is
     if (currentUserProfile.avatarHash.startsWith('http')) {
@@ -343,7 +345,7 @@ const PostComposer = ({ onPost, placeholder = "What's happening in music?", clas
         currentUserProfile.avatarHash.startsWith('ipfs://')) {
       const hash = currentUserProfile.avatarHash.replace('ipfs://', '');
       const ipfsUrl = `https://ipfs.io/ipfs/${hash}`;
-      console.log('✅ Avatar is IPFS, constructed URL:', ipfsUrl);
+      // console.log('✅ Avatar is IPFS, constructed URL:', ipfsUrl);
       return ipfsUrl;
     }
     
