@@ -146,7 +146,9 @@ export const GeneratedMusicHistory = () => {
     setMintingMusicId(song.id);
 
     try {
-      toast.loading('Preparing to mint NFT...', { id: 'mint-nft' });
+      // 🔥 REMOVED: Don't show loading toast here
+      // useNFTOperations will handle all toast notifications
+      console.log('🎵 Starting mint process for:', song.title);
 
       // Get artist name from profile
       const artistName = profileData?.displayName || profileData?.username || 
@@ -183,12 +185,12 @@ export const GeneratedMusicHistory = () => {
 
       // If no IPFS hashes found, upload files to IPFS
       if (!ipfsAudioHash || !ipfsImageHash) {
-        toast.loading('Uploading files to IPFS...', { id: 'mint-nft' });
+        console.log('📤 Uploading files to IPFS...');
         
         try {
           // Upload audio if needed
           if (!ipfsAudioHash) {
-            toast.loading('Uploading audio to IPFS...', { id: 'mint-nft' });
+            console.log('📤 Uploading audio to IPFS...');
             const audioResponse = await fetch(song.audioUrl);
             const audioBlob = await audioResponse.blob();
             const audioFile = new File([audioBlob], `${song.title}.mp3`, { type: 'audio/mpeg' });
@@ -199,7 +201,7 @@ export const GeneratedMusicHistory = () => {
 
           // Upload image if needed
           if (!ipfsImageHash) {
-            toast.loading('Uploading cover image to IPFS...', { id: 'mint-nft' });
+            console.log('📤 Uploading cover image to IPFS...');
             const imageResponse = await fetch(song.imageUrl);
             const imageBlob = await imageResponse.blob();
             const imageFile = new File([imageBlob], `${song.title}-cover.jpg`, { type: 'image/jpeg' });
@@ -208,8 +210,7 @@ export const GeneratedMusicHistory = () => {
             console.log('✅ Image uploaded to IPFS:', ipfsImageHash);
           }
         } catch (uploadError: any) {
-          console.error('Failed to upload to IPFS:', uploadError);
-          toast.dismiss('mint-nft');
+          console.error('❌ Failed to upload to IPFS:', uploadError);
           toast.error(`Failed to upload to IPFS: ${uploadError.message}`);
           return;
         }
@@ -229,7 +230,7 @@ export const GeneratedMusicHistory = () => {
       };
 
       // Upload metadata to IPFS
-      toast.loading('Uploading metadata to IPFS...', { id: 'mint-nft' });
+      console.log('📤 Uploading metadata to IPFS...');
       const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
       const metadataResult = await ipfsService.uploadFile(metadataBlob as any);
       const metadataHash = metadataResult.IpfsHash || metadataResult.ipfsHash || metadataResult.Hash || metadataResult.hash;
@@ -237,7 +238,9 @@ export const GeneratedMusicHistory = () => {
       
       console.log('✅ Metadata uploaded to IPFS:', metadataHash);
 
-      toast.loading('Minting NFT with FREE gas...', { id: 'mint-nft' });
+      // 🔥 REMOVED: Don't show loading toast here
+      // useNFTOperations will handle minting progress and toast
+      console.log('🎵 Minting NFT with FREE gas...');
 
       const mintResult = await mintSongNFT({
         to: address,
@@ -256,8 +259,9 @@ export const GeneratedMusicHistory = () => {
       });
 
       if (mintResult.success) {
-        toast.dismiss('mint-nft');
-        toast.success('🎉 NFT Minted!');
+        // 🔥 REMOVED: Don't show duplicate success toast
+        // useNFTOperations already shows success toast with "View Transaction" button
+        console.log('✅ NFT minted successfully:', mintResult.tokenId);
 
         // Update status in datastream
         try {
@@ -269,18 +273,28 @@ export const GeneratedMusicHistory = () => {
           
           // Reload music list
           await loadAllMusic();
+          
+          console.log('✅ Music status updated in datastream');
         } catch (updateError) {
-          console.error('Failed to update status:', updateError);
-          // Still show success since NFT was minted
+          console.error('⚠️ Failed to update status in datastream:', updateError);
+          // Still success since NFT was minted
         }
       } else {
-        toast.dismiss('mint-nft');
-        toast.error(`Failed to mint NFT: ${mintResult.error}`);
+        // 🔥 REMOVED: Don't show duplicate error toast
+        // useNFTOperations already shows error toast with details
+        console.error('❌ NFT minting failed:', mintResult.error);
       }
     } catch (error: any) {
-      console.error('Minting failed:', error);
-      toast.dismiss('mint-nft');
-      toast.error(`Failed to mint NFT: ${error.message}`);
+      // 🔥 CRITICAL: Only show error toast for unexpected errors
+      // useNFTOperations handles most errors already
+      console.error('❌ Unexpected error during minting:', error);
+      
+      // Only show toast if it's not a minting error (which useNFTOperations handles)
+      if (!error.message?.includes('Minting') && 
+          !error.message?.includes('NFT') &&
+          !error.message?.includes('transaction')) {
+        toast.error(`Unexpected error: ${error.message}`);
+      }
     } finally {
       setMintingMusicId(null);
     }

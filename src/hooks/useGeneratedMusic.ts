@@ -348,6 +348,12 @@ export const useGeneratedMusic = () => {
           
           mintedMusic.push(track);
         }
+        
+        // 🔥 CRITICAL: Add delay between mints to prevent nonce collision
+        if (i < uploadedMusic.length - 1) {
+          console.log(`⏳ Waiting before next mint (${i + 2}/${uploadedMusic.length})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+        }
       }
 
       // 5. Update UI state with minted tracks

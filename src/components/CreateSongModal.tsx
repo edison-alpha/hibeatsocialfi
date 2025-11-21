@@ -773,7 +773,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
         const mintProgress = 70 + ((i / uploadedTracks.length) * 25);
 
         setGenerationProgress({
-          stage: `Minting NFT for "${track.title}" (gas-free)...`,
+          stage: `Minting NFT ${i + 1}/${uploadedTracks.length}: "${track.title}"...`,
           percent: mintProgress
         });
 
@@ -783,7 +783,7 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
             // Construct proper metadata URI
             const metadataURI = `ipfs://${track.ipfsHash}`;
             
-            console.log(`🎵 Minting NFT for "${track.title}" with metadata URI:`, metadataURI);
+            console.log(`🎵 [${i + 1}/${uploadedTracks.length}] Minting NFT for "${track.title}" with metadata URI:`, metadataURI);
             
             // Get artist name from profile or use address
             const artistName = profileData?.displayName || profileData?.username || `${address?.slice(0, 6)}...${address?.slice(-4)}` || 'Unknown Artist';
@@ -814,20 +814,28 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
               };
               mintedTracks.push(mintedTrack);
 
-              console.log(`✅ NFT minted for "${track.title}": Token ID ${mintResult.tokenId}`);
+              console.log(`✅ [${i + 1}/${uploadedTracks.length}] NFT minted for "${track.title}": Token ID ${mintResult.tokenId}`);
             } else {
-              console.error(`❌ NFT minting failed for "${track.title}":`, mintResult.error);
+              console.error(`❌ [${i + 1}/${uploadedTracks.length}] NFT minting failed for "${track.title}":`, mintResult.error);
               failedMints.push(track.title);
               mintedTracks.push(track); // Add without NFT data
             }
           } else {
             // No IPFS hash, skip minting
+            console.log(`⚠️ [${i + 1}/${uploadedTracks.length}] Skipping mint for "${track.title}" - no IPFS hash`);
             mintedTracks.push(track);
           }
         } catch (mintError) {
-          console.error(`Failed to mint NFT for track ${track.title}:`, mintError);
+          console.error(`❌ [${i + 1}/${uploadedTracks.length}] Failed to mint NFT for track ${track.title}:`, mintError);
           failedMints.push(track.title);
           mintedTracks.push(track); // Add without NFT data
+        }
+        
+        // 🔥 CRITICAL: Add delay between mints to prevent nonce collision
+        // Even though transaction queue handles nonce, add buffer for blockchain state
+        if (i < uploadedTracks.length - 1) {
+          console.log(`⏳ Waiting before next mint (${i + 2}/${uploadedTracks.length})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
         }
       }
 
@@ -923,27 +931,32 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
       const mintSuccessCount = mintedTracks.filter(t => t.isMinted).length;
       const totalCount = uploadedTracks.length;
 
-      let successMessage = `Successfully generated ${totalCount} track(s)!`;
-      if (successCount === totalCount) {
-        successMessage += ` All tracks uploaded to IPFS.`;
-      } else if (successCount > 0) {
-        successMessage += ` ${successCount} uploaded to IPFS, ${failedUploads.length} using fallback URLs.`;
-      } else {
-        successMessage += ` Using original URLs as fallback.`;
+      // 🔥 FIXED: Only show summary toast if multiple tracks OR if there were failures
+      // For single track, useNFTOperations already showed the success toast
+      if (totalCount > 1 || failedMints.length > 0 || failedUploads.length > 0) {
+        let successMessage = `Successfully generated ${totalCount} track(s)!`;
+        if (successCount === totalCount) {
+          successMessage += ` All tracks uploaded to IPFS.`;
+        } else if (successCount > 0) {
+          successMessage += ` ${successCount} uploaded to IPFS, ${failedUploads.length} using fallback URLs.`;
+        } else {
+          successMessage += ` Using original URLs as fallback.`;
+        }
+
+        if (mintSuccessCount > 0) {
+          successMessage += ` ${mintSuccessCount} NFT(s) minted with FREE gas!`;
+        }
+
+        if (mintSuccessCount === totalCount && successCount === totalCount) {
+          toast.success(`🎵🎨 Perfect! ${successMessage}`);
+        } else if (mintSuccessCount > 0) {
+          toast.success(`🎵 ${successMessage}`);
+        } else {
+          toast.success(`🎵 ${successMessage}`);
+        }
       }
 
-      if (mintSuccessCount > 0) {
-        successMessage += ` ${mintSuccessCount} NFT(s) minted with FREE gas!`;
-      }
-
-      if (mintSuccessCount === totalCount && successCount === totalCount) {
-        toast.success(`🎵🎨 Perfect! ${successMessage}`);
-      } else if (mintSuccessCount > 0) {
-        toast.success(`🎵 ${successMessage}`);
-      } else {
-        toast.success(`🎵 ${successMessage}`);
-      }
-
+      // Show warning for failed mints
       if (failedMints.length > 0) {
         toast.warning(`NFT minting failed for: ${failedMints.join(', ')}`);
       }
@@ -2102,6 +2115,12 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
                     {song.ipfsHash && !song.isMinted && (
                       <Button
                         onClick={async () => {
+                          // 🔒 CRITICAL: Prevent double-click
+                          if (isMinting) {
+                            console.warn('⚠️ Minting already in progress, ignoring duplicate click');
+                            return;
+                          }
+                          
                           try {
                             const artistName = profileData?.displayName || profileData?.username || song.artist || `${address?.slice(0, 6)}...${address?.slice(-4)}` || 'Unknown Artist';
                             
@@ -2136,7 +2155,9 @@ const CreateSongModal = ({ isOpen, onClose, onShareToFeed }: CreateSongModalProp
                                 )
                               );
 
-                              toast.success(`🎵 NFT Minted! Token ID: ${mintResult.tokenId}`);
+                              // 🔥 REMOVED: Don't show duplicate toast here
+                              // useNFTOperations already shows success toast
+                              console.log(`✅ NFT minted successfully for "${song.title}": Token ID ${mintResult.tokenId}`);
                               
                               // Update status in datastream
                               try {

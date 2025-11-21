@@ -1,8 +1,7 @@
 // src/hooks/useNFTOperations.ts
 import { useState } from 'react';
-import { useAccount, useWalletClient } from 'wagmi';
+import { useAccount } from 'wagmi';
 import { toast } from 'sonner';
-import { ethers } from 'ethers';
 import { useSequence } from '../contexts/SequenceContext';
 import { NFTMintParams } from '../types/music';
 import { CONTRACT_ADDRESSES } from '../lib/web3-config';
@@ -32,74 +31,24 @@ export const useNFTOperations = () => {
   // Contract address from web3-config
   const SONG_NFT_ADDRESS = CONTRACT_ADDRESSES.songNFT;
 
-  // Get songNFT contract - always use direct instance for now since ERC4337 context has mock contracts
-  const getSongNFTContract = async () => {
-    // Always use direct contract instance since ERC4337 context has mock contracts without proper ABI
-    if (!window.ethereum) {
-      throw new Error('No Ethereum provider available');
-    }
-
-    const provider = new ethers.BrowserProvider(window.ethereum);
-    // Ensure wallet is connected to Somnia testnet (chainId 50312 / 0xC488)
-    try {
-      const network = await provider.getNetwork();
-      if (Number(network.chainId) !== 50312) {
-        try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0xC488' }],
-          });
-        } catch (switchError: any) {
-          // If the chain hasn't been added to the wallet, request to add it
-          if (switchError && switchError.code === 4902) {
-            try {
-              await window.ethereum.request({
-                method: 'wallet_addEthereumChain',
-                params: [{
-                  chainId: '0xC488',
-                  chainName: 'Somnia Testnet',
-                  nativeCurrency: { name: 'SOM', symbol: 'SOM', decimals: 18 },
-                  rpcUrls: ['https://dream-rpc.somnia.network'],
-                  blockExplorerUrls: ['https://shannon-explorer.somnia.network']
-                }]
-              });
-            } catch (addErr) {
-              console.warn('Failed to add Somnia network to wallet:', addErr);
-            }
-          } else {
-            console.warn('Failed to switch network:', switchError);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Unable to determine provider network:', err);
-    }
-
-    const signer = await provider.getSigner();
-
-    // Full ABI for SongNFT contract
-    const songNFTABI = [
-      "function mintSong(address to, string memory title, string memory artist, string memory genre, uint256 duration, string memory ipfsAudioHash, string memory ipfsArtworkHash, uint256 royaltyPercentage, bool isExplicit, string memory metadataURI) external returns (uint256)",
-      "function tokenURI(uint256 tokenId) external view returns (string memory)",
-      "function ownerOf(uint256 tokenId) external view returns (address)",
-      "function getSongMetadata(uint256 tokenId) external view returns (tuple(string title, string artist, string genre, uint256 duration, string ipfsAudioHash, string ipfsArtworkHash, uint256 royaltyPercentage, address artistAddress, uint256 createdAt, bool isExplicit, uint256 likeCount, uint256 playCount))",
-      "event SongMinted(uint256 indexed tokenId, address indexed artist, string title, string ipfsAudioHash)",
-      "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
-    ];
-
-    const songNFTContract = new ethers.Contract(
-      SONG_NFT_ADDRESS,
-      songNFTABI,
-      signer
-    );
-
-    return songNFTContract;
-  };
+  // 🔥 REMOVED: getSongNFTContract fallback
+  // Reason: Triggers MetaMask/OKX for Sequence users (logged in with Gmail)
+  // All minting should use gasless Sequence WaaS only
+  // If gasless fails, show error instead of fallback to paid transaction
 
   const mintSongNFT = async (params: NFTMintParams): Promise<MintingResult> => {
     if (!address) {
       toast.error('Please connect your wallet first');
       return { success: false, error: 'Wallet not connected' };
+    }
+
+    // 🔒 CRITICAL: Prevent concurrent minting
+    if (isMinting) {
+      console.warn('⚠️ Minting already in progress, rejecting duplicate call');
+      return { 
+        success: false, 
+        error: 'Minting already in progress. Please wait for the current operation to complete.' 
+      };
     }
 
     setIsMinting(true);
@@ -145,13 +94,69 @@ export const useNFTOperations = () => {
         metadataURI
       );
 
-      setMintingProgress('Waiting for confirmation...');
+      setMintingProgress('Waiting for blockchain confirmation...');
 
-      // For ERC4337, we need to wait for the user operation to be mined
-      // This is a simplified version - in production you'd poll for the user operation receipt
-      await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds for processing
+      // 🔥 CRITICAL: Wait for blockchain confirmation using Datastream (faster than RPC polling)
+      console.log('⏳ Waiting for transaction confirmation:', transactionHash);
+      
+      try {
+        // Import Datastream wait function (same as SequenceContext uses)
+        const { waitForTransactionWithFallback } = await import('@/utils/waitForTransactionDatastream');
+        const { getPublicClient } = await import('@wagmi/core');
+        const { wagmiConfig } = await import('@/lib/web3-config');
+        
+        const publicClient = getPublicClient(wagmiConfig);
+        
+        if (!publicClient) {
+          console.warn('⚠️ Public client not available, using fallback delay');
+          // Wait a bit for transaction to be mined (Somnia has sub-second finality)
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } else {
+          // Use Datastream for real-time confirmation (much faster than RPC polling)
+          const receipt = await waitForTransactionWithFallback(
+            transactionHash,
+            publicClient,
+            10000 // 10s timeout
+          );
 
-      // Extract token ID from transaction (this would need to be implemented based on your bundler)
+          console.log('✅ Transaction confirmed via Datastream:', {
+            hash: transactionHash,
+            blockNumber: receipt.blockNumber,
+            status: receipt.status,
+            latency: `${receipt.confirmationTime}ms`
+          });
+
+          if (receipt.status !== 'success') {
+            throw new Error('Transaction reverted on blockchain');
+          }
+        }
+      } catch (waitError: any) {
+        // 🔥 CRITICAL: Don't throw error if it's just a timeout or confirmation issue
+        // Transaction was already sent successfully, just confirmation is slow
+        const errorMsg = waitError?.message || String(waitError);
+        const isTimeout = errorMsg.includes('timeout') || 
+                         errorMsg.includes('deadline exceeded') ||
+                         errorMsg.includes('timed out') ||
+                         errorMsg.includes('ETIMEDOUT');
+        
+        const isNetworkIssue = errorMsg.includes('network') ||
+                              errorMsg.includes('fetch failed') ||
+                              errorMsg.includes('ECONNREFUSED');
+        
+        if (isTimeout || isNetworkIssue) {
+          console.warn('⚠️ Confirmation timeout/network issue, but transaction was sent successfully:', transactionHash);
+          console.warn('⚠️ Transaction will be confirmed shortly. Check explorer:', `https://shannon-explorer.somnia.network/tx/${transactionHash}`);
+          console.warn('⚠️ Error details:', errorMsg);
+          // Don't throw - transaction was sent successfully, just confirmation is slow
+          // Continue to show success toast
+        } else {
+          // Real error (transaction reverted, etc) - throw it
+          console.error('❌ Transaction confirmation failed with real error:', waitError);
+          throw waitError;
+        }
+      }
+
+      // Extract token ID from transaction
       // For now, we'll use a placeholder approach
       const tokenId = 'pending'; // In production, you'd get this from the user operation receipt
 
@@ -159,8 +164,15 @@ export const useNFTOperations = () => {
 
       setMintingProgress('NFT minted successfully with sponsored gas!');
 
-      // Include explorer URL in toast so the user can open/copy it
-      toast.success(`🎵 NFT Minted with FREE gas! Token ID: ${tokenId} — View: ${explorerUrl}`);
+      // 🔥 FIXED: Show success toast only once with all details
+      toast.success('🎵 NFT Minted with FREE gas!', {
+        description: `Token ID: ${tokenId}`,
+        duration: 5000,
+        action: {
+          label: 'View Transaction',
+          onClick: () => window.open(explorerUrl, '_blank')
+        }
+      });
 
       // Log metadata URI for debugging
       console.log('✅ NFT Minted successfully:', {
@@ -178,112 +190,59 @@ export const useNFTOperations = () => {
       };
 
     } catch (error) {
-      console.error('NFT minting failed:', error);
+      // 🔍 DEBUG: Log detailed error information
+      console.error('❌ NFT minting failed - OUTER CATCH:', error);
+      console.error('❌ Error type:', error?.constructor?.name);
+      console.error('❌ Error message:', error instanceof Error ? error.message : String(error));
+      console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       
-      // Check if it's a wallet timeout or user rejection
-      const isWalletIssue = errorMessage.includes('timeout') || 
-                           errorMessage.includes('rejected') ||
-                           errorMessage.includes('cancelled');
-
-      // Fallback to direct contract call if ERC4337 fails
-      if (isWalletIssue) {
-        toast.warning('Gasless minting unavailable. Switching to direct minting (you pay gas)...');
-        console.log('⚠️ Gasless minting timeout, switching to direct minting...');
-      } else {
-        console.log('❌ ERC4337 minting failed, trying direct contract call...');
-      }
-
-      try {
-        setMintingProgress('Falling back to direct minting...');
-
-        const songNFT = await getSongNFTContract();
-
-        if (!params.ipfsAudioHash || !params.title) {
-          throw new Error('Missing required NFT parameters: ipfsAudioHash and title are required');
-        }
-
-        // Ensure metadataURI is properly formatted for fallback
-        const fallbackMetadataURI = params.metadataURI;
+      // Check if user rejected or cancelled
+      if (errorMessage.includes('rejected') || 
+          errorMessage.includes('cancelled') || 
+          errorMessage.includes('User rejected')) {
+        toast.info('Minting cancelled', {
+          description: 'You cancelled the transaction',
+          duration: 3000
+        });
         
-        console.log('🔄 Fallback minting with metadataURI:', fallbackMetadataURI);
-        
-        const tx = await songNFT.mintSong(
-          params.to,
-          params.title,
-          params.artist || 'HiBeats AI',
-          params.genre || 'Electronic',
-          params.duration,
-          params.ipfsAudioHash,
-          params.ipfsArtworkHash || '',
-          params.royaltyPercentage || 500,
-          params.isExplicit || false,
-          fallbackMetadataURI
-        );
-
-        const receipt = await tx.wait();
-
-        if (receipt?.status === 1) {
-          const mintEvent = receipt.logs.find(log => {
-            try {
-              const parsed = songNFT.interface.parseLog(log);
-              return parsed?.name === 'SongMinted';
-            } catch {
-              return false;
-            }
-          });
-
-          let tokenId = 'unknown';
-          if (mintEvent) {
-            const parsed = songNFT.interface.parseLog(mintEvent);
-            tokenId = parsed?.args[0]?.toString() || 'unknown';
-          }
-
-          const explorerUrl = `https://shannon-explorer.somnia.network/tx/${receipt.hash}`;
-
-          setMintingProgress('NFT minted successfully (with gas fees)!');
-
-          toast.success(`🎵 NFT Minted! Token ID: ${tokenId} (Note: Gas fees were paid by you) — View: ${explorerUrl}`);
-
-          // Log metadata URI for debugging
-          console.log('✅ NFT Minted successfully (fallback):', {
-            tokenId,
-            transactionHash: receipt.hash,
-            metadataURI: params.metadataURI,
-            explorerUrl
-          });
-
-          return {
-            success: true,
-            tokenId,
-            transactionHash: receipt.hash,
-            explorerUrl
-          };
-        } else {
-          throw new Error('Transaction failed');
-        }
-
-      } catch (fallbackError) {
-        console.error('Fallback minting also failed:', fallbackError);
-        const fallbackErrorMessage = fallbackError instanceof Error ? fallbackError.message : 'Fallback minting failed';
-
-        // Check if user rejected the transaction
-        if (fallbackErrorMessage.includes('rejected') || fallbackErrorMessage.includes('denied')) {
-          toast.error('Transaction was rejected. Please try again when ready.');
-          return {
-            success: false,
-            error: 'User rejected transaction'
-          };
-        }
-
-        toast.error(`Failed to mint NFT: ${fallbackErrorMessage}`);
-
         return {
           success: false,
-          error: fallbackErrorMessage
+          error: 'User cancelled transaction'
         };
       }
+      
+      // Check if it's a duplicate transaction (already sent)
+      if (errorMessage.includes('Duplicate transaction') || 
+          errorMessage.includes('already in progress')) {
+        toast.warning('Transaction already in progress', {
+          description: 'Please wait for the current minting to complete',
+          duration: 4000
+        });
+        
+        return {
+          success: false,
+          error: 'Duplicate transaction'
+        };
+      }
+      
+      // For other errors (real minting failures), show error
+      console.error('❌ Gasless minting failed with error:', errorMessage);
+      
+      toast.error('Failed to mint NFT', {
+        description: errorMessage.includes('insufficient') 
+          ? 'Insufficient balance or gas' 
+          : errorMessage.includes('Account not ready')
+          ? 'Please wait for wallet to be ready'
+          : 'Please try again or contact support',
+        duration: 6000
+      });
+
+      return {
+        success: false,
+        error: errorMessage
+      };
     } finally {
       setIsMinting(false);
       setMintingProgress('');
@@ -300,11 +259,35 @@ export const useNFTOperations = () => {
 
   /**
    * Get token URI from blockchain to verify metadata
+   * Uses publicClient instead of direct contract call to avoid MetaMask popup
    */
   const getTokenURI = async (tokenId: string): Promise<string | null> => {
     try {
-      const songNFT = await getSongNFTContract();
-      const uri = await songNFT.tokenURI(tokenId);
+      const { getPublicClient } = await import('@wagmi/core');
+      const { wagmiConfig } = await import('@/lib/web3-config');
+      
+      const publicClient = getPublicClient(wagmiConfig);
+      
+      if (!publicClient) {
+        console.warn('Public client not available');
+        return null;
+      }
+      
+      const uri = await publicClient.readContract({
+        address: SONG_NFT_ADDRESS as `0x${string}`,
+        abi: [
+          {
+            name: 'tokenURI',
+            type: 'function',
+            stateMutability: 'view',
+            inputs: [{ name: 'tokenId', type: 'uint256' }],
+            outputs: [{ name: '', type: 'string' }]
+          }
+        ] as const,
+        functionName: 'tokenURI',
+        args: [BigInt(tokenId)]
+      } as any) as string;
+      
       console.log(`📋 Token URI for token #${tokenId}:`, uri);
       return uri;
     } catch (error) {

@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { X, Coins } from "lucide-react";
-import { useBalance } from "wagmi";
+import { useBalance, usePublicClient } from "wagmi";
 import { parseEther } from "viem";
 import { toast } from "sonner";
 import { useSequence } from "@/contexts/SequenceContext";
@@ -28,6 +28,7 @@ export default function TipModal({
   onTipSent,
 }: TipModalProps) {
   const { smartAccountAddress, executeGaslessTransaction } = useSequence();
+  const publicClient = usePublicClient();
   const { data: balance } = useBalance({
     address: smartAccountAddress as `0x${string}`,
   });
@@ -51,6 +52,7 @@ export default function TipModal({
 
     setIsSending(true);
     try {
+      const startTime = Date.now();
       toast.loading("Sending tip...", { id: "send-tip" });
 
       const txData = "0x";
@@ -62,18 +64,58 @@ export default function TipModal({
         amountWei
       );
 
-      toast.dismiss("send-tip");
-      toast.success("Tip sent!", {
-        description: `Sent ${amount} STT to ${recipientName}`,
-        action: {
-          label: "View",
-          onClick: () =>
-            window.open(
-              `https://shannon-explorer.somnia.network/tx/${txHash}`,
-              "_blank"
-            ),
-        },
+      const sendTime = Date.now() - startTime;
+      console.log('📤 Tip transaction sent:', txHash, `in ${sendTime}ms`);
+      
+      // 🔥 CRITICAL: Wait for blockchain confirmation
+      toast.loading("Confirming on blockchain...", { id: "send-tip" });
+      
+      if (!publicClient) {
+        throw new Error("Public client not available");
+      }
+      
+      // Wait for transaction receipt (Somnia has sub-second finality)
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash as `0x${string}`,
+        timeout: 10000, // 10s timeout (Somnia usually < 1s)
+        pollingInterval: 100, // Poll every 100ms
+        confirmations: 1
       });
+
+      const totalTime = Date.now() - startTime;
+      const confirmTime = totalTime - sendTime;
+
+      toast.dismiss("send-tip");
+      
+      // Check transaction status
+      if (receipt.status === 'success') {
+        toast.success("Tip sent!", {
+          description: `Sent ${amount} STT to ${recipientName} in ${(totalTime/1000).toFixed(1)}s`,
+          action: {
+            label: "View",
+            onClick: () =>
+              window.open(
+                `https://shannon-explorer.somnia.network/tx/${txHash}`,
+                "_blank"
+              ),
+          },
+        });
+
+        console.log('✅ Tip transaction confirmed:', {
+          txHash,
+          amount: `${amount} STT`,
+          recipient: recipientName,
+          blockNumber: receipt.blockNumber,
+          sendTime: `${sendTime}ms`,
+          confirmTime: `${confirmTime}ms`,
+          totalTime: `${totalTime}ms`,
+          status: receipt.status
+        });
+      } else if (receipt.status === 'reverted') {
+        throw new Error('Transaction reverted on blockchain. The transaction was rejected by the smart contract.');
+      } else {
+        throw new Error(`Transaction failed with status: ${receipt.status}`);
+      }
 
       // 🔔 Send tip notification
       if (smartAccountAddress && recipientAddress && smartAccountAddress.toLowerCase() !== recipientAddress.toLowerCase()) {

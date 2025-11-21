@@ -132,6 +132,21 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
     console.log('🔒 Auto-approve session closed');
   }, []);
 
+  // 🔥 Initialize WebSocket client on app startup
+  useEffect(() => {
+    const initWebSocket = async () => {
+      try {
+        const { initializeWebSocketClient } = await import('@/lib/websocket-client');
+        await initializeWebSocketClient();
+      } catch (error) {
+        console.warn('⚠️ [WEBSOCKET] Failed to initialize on startup (will use HTTP fallback):', error);
+      }
+    };
+
+    // Initialize WebSocket as soon as app loads
+    initWebSocket();
+  }, []); // Run once on mount
+
   // Initialize Sequence account
   useEffect(() => {
     const initSequenceAccount = async () => {
@@ -235,17 +250,25 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
       throw new Error('Another financial transaction is already in progress. Please wait.');
     }
 
-    // 🔒 CRITICAL: Prevent duplicate transactions
-    if (value > 0n) {
-      const txKey = `${to}-${value.toString()}-${data.slice(0, 20)}`;
-      if (sentTxRef.current.has(txKey)) {
-        const error = `❌ BLOCKED: Duplicate transaction detected (same to/value/data)`;
-        console.error(error, { to, value: value.toString(), data: data.slice(0, 20) });
-        throw new Error('Duplicate transaction detected. This transaction was already sent.');
-      }
-      sentTxRef.current.add(txKey);
-      console.log('✅ Transaction marked as sent:', txKey);
+    // 🔒 CRITICAL: Prevent duplicate transactions (for ALL transactions, not just financial)
+    // This includes NFT minting, album creation, etc. which have value = 0n
+    const txKey = `${to}-${value.toString()}-${data.slice(0, 50)}`; // Use more data for uniqueness
+    if (sentTxRef.current.has(txKey)) {
+      const error = `❌ BLOCKED: Duplicate transaction detected (same to/value/data)`;
+      console.error(error, { 
+        to: to.slice(0, 10) + '...', 
+        value: value.toString(), 
+        dataPreview: data.slice(0, 20) + '...',
+        txKey: txKey.slice(0, 50) + '...'
+      });
+      throw new Error('Duplicate transaction detected. This transaction was already sent.');
     }
+    sentTxRef.current.add(txKey);
+    console.log('✅ Transaction marked as sent:', {
+      to: to.slice(0, 10) + '...',
+      value: value.toString(),
+      keyPreview: txKey.slice(0, 50) + '...'
+    });
 
     // Ensure wallet is fully ready before sending transaction
     if (!isAccountReady) {
@@ -400,16 +423,44 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
         }
 
       } catch (waitError) {
-        console.warn('⚠️ Confirmation failed:', waitError);
+        console.warn('⚠️ Confirmation timeout (transaction may still be processing):', waitError);
         
-        // Mark as failed in tracking
-        if (realtimeTxContext) {
-          realtimeTxContext.completeTransaction(txHash, 0, false);
+        // Try one more time with getTransactionReceipt (non-blocking)
+        try {
+          const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+          if (receipt) {
+            const latency = Date.now() - sendTime;
+            console.log('✅ Transaction confirmed (via direct receipt check):', {
+              hash: txHash,
+              blockNumber: receipt.blockNumber,
+              status: receipt.status,
+              latency: `${latency}ms`
+            });
+            
+            if (realtimeTxContext) {
+              realtimeTxContext.completeTransaction(
+                txHash,
+                Number(receipt.blockNumber),
+                receipt.status === 'success'
+              );
+            }
+          } else {
+            // Transaction sent but not yet mined - this is OK
+            console.log('ℹ️ Transaction sent but not yet confirmed. Will be processed shortly:', txHash);
+            
+            // Mark as pending in tracking
+            if (realtimeTxContext) {
+              realtimeTxContext.trackTransaction(txHash, methodName);
+            }
+          }
+        } catch (receiptError) {
+          console.warn('⚠️ Could not get receipt, transaction may still be processing');
+          
+          // Mark as pending in tracking
+          if (realtimeTxContext) {
+            realtimeTxContext.trackTransaction(txHash, methodName);
+          }
         }
-        
-        // Don't throw here - transaction was sent successfully
-        // Just log the confirmation failure
-        console.log('ℹ️ Transaction sent but confirmation failed. Check explorer:', txHash);
       }
 
       // 🔓 Unlock financial transactions on success
@@ -418,6 +469,15 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
         console.log('🔓 Unlocked financial transaction');
       }
 
+      // 🧹 CRITICAL: Remove from sent transactions cache after success
+      // This allows the same transaction to be sent again in the future if needed
+      const txKey = `${to}-${value.toString()}-${data.slice(0, 50)}`;
+      sentTxRef.current.delete(txKey);
+      console.log('🧹 Removed transaction from cache (success):', {
+        to: to.slice(0, 10) + '...',
+        keyPreview: txKey.slice(0, 50) + '...'
+      });
+
       return txHash;
     } catch (error: any) {
       // 🔓 Unlock financial transactions on error
@@ -425,6 +485,15 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
         setPendingFinancialTx(null);
         console.log('🔓 Unlocked financial transaction (error)');
       }
+
+      // 🧹 CRITICAL: Remove from sent transactions cache after error
+      // This allows retry if the error was temporary (network issue, etc)
+      const txKey = `${to}-${value.toString()}-${data.slice(0, 50)}`;
+      sentTxRef.current.delete(txKey);
+      console.log('🧹 Removed transaction from cache (error):', {
+        to: to.slice(0, 10) + '...',
+        keyPreview: txKey.slice(0, 50) + '...'
+      });
 
       console.error(`❌ Transaction failed (attempt ${retryCount + 1}):`, error);
 
@@ -1887,9 +1956,9 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
     // 🔥 Enqueue transaction to prevent nonce collision
     return transactionQueue.enqueue(async () => {
       try {
-        // Show loading toast
-        toast.loading('Minting Song NFT...', { id: 'mint-nft' });
-
+        // 🔥 REMOVED: Don't show toast here - let useNFTOperations handle it
+        // This prevents double toast (one from here, one from useNFTOperations)
+        
         // Use provided metadataURI or construct default one
         const finalMetadataURI = metadataURI || `ipfs://${ipfsAudioHash.replace('ipfs://', '')}/metadata.json`;
         
@@ -1945,15 +2014,15 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
 
         const txHash = await executeGaslessTransaction(CONTRACT_ADDRESSES.songNFT, data);
         
-        // Dismiss loading and show success
-        toast.dismiss('mint-nft');
-        showSuccessToast('NFT Minted!', txHash, `Minted: ${title} by ${artist}`);
+        // 🔥 REMOVED: Don't show success toast here
+        // useNFTOperations will show the success toast with more details
+        console.log('✅ Mint transaction sent successfully:', txHash);
         
         return txHash;
       } catch (error) {
         console.error('Mint song NFT failed:', error);
-        toast.dismiss('mint-nft');
-        showErrorToast('Failed to Mint NFT', error);
+        // 🔥 REMOVED: Don't show error toast here
+        // useNFTOperations will handle error display
         throw error;
       }
     });
@@ -1975,8 +2044,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
     // 🔥 Enqueue transaction to prevent nonce collision
     return transactionQueue.enqueue(async () => {
       try {
-        toast.loading('Creating album...', { id: 'create-album' });
-
+        // 🔥 REMOVED: Don't show toast here
+        // PublishAlbumModal handles all toast notifications for better UX
         console.log('🎵 Creating album:', {
           title,
           albumType,
@@ -2010,9 +2079,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
           data
         );
 
-        toast.dismiss('create-album');
-        showSuccessToast('Album Created!', txHash, `Created: ${title}`);
-        
+        // 🔥 REMOVED: Don't show success toast here
+        // PublishAlbumModal will show appropriate toast after adding songs
         console.log('✅ Album created successfully:', {
           title,
           txHash
@@ -2024,8 +2092,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
           title,
           error
         });
-        toast.dismiss('create-album');
-        showErrorToast('Failed to Create Album', error);
+        // 🔥 REMOVED: Don't show error toast here
+        // PublishAlbumModal will handle error display
         throw error;
       }
     });
@@ -2041,8 +2109,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
     // 🔥 Enqueue transaction to prevent nonce collision
     return transactionQueue.enqueue(async () => {
       try {
-        toast.loading('Adding song to album...', { id: 'add-song' });
-
+        // 🔥 REMOVED: Don't show toast here
+        // PublishAlbumModal handles all toast notifications for better UX
         console.log('🎵 Adding song to album:', {
           albumId,
           songTokenId,
@@ -2071,9 +2139,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
           data
         );
 
-        toast.dismiss('add-song');
-        showSuccessToast('Song Added!', txHash, 'Song added to album');
-        
+        // 🔥 REMOVED: Don't show success toast here
+        // PublishAlbumModal will show summary toast after all songs added
         console.log('✅ Song added to album successfully:', {
           albumId,
           songTokenId,
@@ -2087,8 +2154,8 @@ export const SequenceProvider = ({ children }: SequenceProviderProps) => {
           songTokenId,
           error
         });
-        toast.dismiss('add-song');
-        showErrorToast('Failed to Add Song', error);
+        // 🔥 REMOVED: Don't show error toast here
+        // PublishAlbumModal will handle error display and retry logic
         throw error;
       }
     });

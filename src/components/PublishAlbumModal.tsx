@@ -117,8 +117,11 @@ export default function PublishAlbumModal({
     setIsPublishing(true);
 
     try {
+      // 🔥 Single loading toast for entire process
+      toast.loading('Publishing album...', { id: 'publish-album' });
+      
       // Upload cover to IPFS
-      toast.loading('Uploading cover to IPFS...', { id: 'publish-album' });
+      console.log('📤 Uploading cover to IPFS...');
       const coverResult = await ipfsService.uploadFile(coverFile);
       const coverHash = coverResult.IpfsHash || coverResult.ipfsHash || coverResult.Hash || coverResult.hash;
       
@@ -150,7 +153,7 @@ export default function PublishAlbumModal({
       };
 
       // Upload metadata to IPFS
-      toast.loading('Creating album metadata...', { id: 'publish-album' });
+      console.log('📤 Creating album metadata...');
       const metadataBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
       const metadataResult = await ipfsService.uploadFile(metadataBlob as any);
       const metadataHash = metadataResult.IpfsHash || metadataResult.ipfsHash || metadataResult.Hash || metadataResult.hash;
@@ -158,7 +161,7 @@ export default function PublishAlbumModal({
       console.log('✅ Metadata uploaded:', metadataHash);
 
       // Create album on blockchain
-      toast.loading('Creating album on blockchain...', { id: 'publish-album' });
+      console.log('🎵 Creating album on blockchain...');
       const albumTxHash = await createAlbum(
         title,
         description,
@@ -170,7 +173,7 @@ export default function PublishAlbumModal({
       console.log('✅ Album created:', albumTxHash);
 
       // 🔥 Wait for transaction and get album ID
-      toast.loading('Getting album ID...', { id: 'publish-album' });
+      console.log('🔍 Getting album ID...');
       
       let albumId: number | null = null;
       
@@ -255,7 +258,6 @@ export default function PublishAlbumModal({
       // Method 3: Fallback to subgraph
       if (!albumId) {
         console.log('🔍 Method 3: Querying subgraph...');
-        toast.loading('Querying subgraph for album ID...', { id: 'publish-album' });
         
         const maxRetries = 3;
         const retryDelay = 3000;
@@ -295,7 +297,6 @@ export default function PublishAlbumModal({
 
       // Add songs to album with better error handling and retry
       console.log(`🎵 Adding ${selectedSongIds.length} songs to album ${albumId}...`);
-      toast.loading('Adding songs to album...', { id: 'publish-album' });
       
       let successCount = 0;
       let failCount = 0;
@@ -303,7 +304,7 @@ export default function PublishAlbumModal({
       
       for (let i = 0; i < selectedSongIds.length; i++) {
         const songId = selectedSongIds[i];
-        toast.loading(`Adding song ${i + 1}/${selectedSongIds.length}...`, { id: 'publish-album' });
+        console.log(`🎵 Adding song ${i + 1}/${selectedSongIds.length}...`);
         
         let retries = 0;
         const maxRetries = 2;
@@ -317,7 +318,33 @@ export default function PublishAlbumModal({
             }
             
             console.log(`🎵 Adding song ${songId} to album ${albumId}...`);
-            await addSongToAlbum(albumId, songId);
+            const txHash = await addSongToAlbum(albumId, songId);
+            
+            // 🔥 CRITICAL: Wait for transaction confirmation to prevent double submission
+            console.log('⏳ Waiting for addSongToAlbum confirmation...');
+            try {
+              const { getPublicClient } = await import('@wagmi/core');
+              const { wagmiConfig } = await import('@/lib/web3-config');
+              const publicClient = getPublicClient(wagmiConfig);
+              
+              if (publicClient) {
+                const receipt = await publicClient.waitForTransactionReceipt({
+                  hash: txHash as `0x${string}`,
+                  timeout: 10000,
+                  pollingInterval: 100,
+                  confirmations: 1
+                });
+                
+                if (receipt.status !== 'success') {
+                  throw new Error('Transaction failed on blockchain');
+                }
+                
+                console.log(`✅ Song ${songId} confirmed on blockchain`);
+              }
+            } catch (waitError) {
+              console.warn('⚠️ Could not confirm transaction, continuing:', waitError);
+            }
+            
             successCount++;
             success = true;
             console.log(`✅ Successfully added song ${songId} (${successCount}/${selectedSongIds.length})`);
@@ -331,9 +358,11 @@ export default function PublishAlbumModal({
           }
         }
         
-        // Delay between songs (already handled by transaction queue, but add small buffer)
+        // 🔥 IMPORTANT: Longer delay between songs to prevent nonce collision
+        // Transaction queue handles nonce, but add buffer for blockchain state
         if (i < selectedSongIds.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 300));
+          console.log(`⏳ Waiting before next song (${i + 2}/${selectedSongIds.length})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Increased from 300ms to 1000ms
         }
       }
       

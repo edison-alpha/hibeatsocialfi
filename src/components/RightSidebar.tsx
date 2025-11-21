@@ -3,12 +3,14 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
-import { Play } from "lucide-react";
+import { Play, Pause } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSequence } from "@/contexts/SequenceContext";
 import { useCurrentUserProfile } from "@/hooks/useRealTimeProfile";
 import { VerifiedBadge } from "@/components/VerifiedBadge";
 import DataStreamStatus from "@/components/DataStreamStatus";
+import { useTrendingMusic } from "@/hooks/useTrendingMusic";
+import { useAudio } from "@/contexts/AudioContext";
 
 interface Transaction {
   txHash: string;
@@ -31,6 +33,10 @@ const RightSidebar = ({
   const { userProfile } = useAuth();
   const { smartAccountAddress } = useSequence();
   const { profileData: currentUserProfile } = useCurrentUserProfile();
+  const { currentTrack, isPlaying, playTrack, pauseTrack } = useAudio();
+  
+  // 🔥 Load trending music from blockchain (limit to 5)
+  const { trendingTracks, isLoading: loadingTrending } = useTrendingMusic(5);
 
   const formatNumber = (num: number) => {
     if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
@@ -145,27 +151,105 @@ const RightSidebar = ({
           </Card>
         )}
 
-        {/* Trending Songs */}
+        {/* Trending Songs - Real Data */}
         <Card className="border-border/50 bg-background/80 backdrop-blur-sm">
           <CardContent className="p-4">
             <h3 className="font-clash font-semibold text-lg mb-3">Trending Songs</h3>
-            <div className="space-y-3">
-              {[
-                { title: 'Neon Dreams', artist: 'Synthwave Collective', plays: '12.5K' },
-                { title: 'Midnight Groove', artist: 'Jazz Fusion', plays: '8.9K' },
-                { title: 'Urban Pulse', artist: 'Beat Masters', plays: '21.6K' },
-                { title: 'Ocean Waves', artist: 'Ambient Sounds', plays: '6.3K' }
-              ].map((song, index) => (
-                <div key={song.title} className="flex items-center gap-3 cursor-pointer hover:bg-muted/50 p-2 rounded-md transition-colors">
-                  <span className="text-xs font-semibold text-muted-foreground w-4">{index + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{song.title}</p>
-                    <p className="text-xs text-muted-foreground truncate">{song.artist}</p>
+            
+            {/* Loading State */}
+            {loadingTrending && (
+              <div className="space-y-3">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="flex items-center gap-3 p-2">
+                    <div className="w-4 h-4 bg-muted animate-pulse rounded" />
+                    <div className="flex-1">
+                      <div className="h-3 w-24 bg-muted animate-pulse rounded mb-1" />
+                      <div className="h-2 w-16 bg-muted animate-pulse rounded" />
+                    </div>
+                    <div className="w-8 h-3 bg-muted animate-pulse rounded" />
                   </div>
-                  <span className="text-xs text-muted-foreground">{song.plays}</span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
+            
+            {/* Trending Tracks */}
+            {!loadingTrending && trendingTracks.length > 0 && (
+              <div className="space-y-3">
+                {trendingTracks.map((track, index) => {
+                  // Convert TrendingTrack to Track format for AudioContext
+                  const audioTrack = {
+                    id: track.tokenId,
+                    title: track.title,
+                    artist: track.artist,
+                    avatar: track.artist.substring(0, 2).toUpperCase(),
+                    cover: track.cover,
+                    genre: track.genre,
+                    duration: `${Math.floor(track.duration / 60)}:${(track.duration % 60).toString().padStart(2, '0')}`,
+                    audioUrl: track.audioUrl,
+                    likes: track.likeCount,
+                    plays: track.playCount
+                  };
+                  
+                  const isCurrentTrack = currentTrack?.id === track.tokenId;
+                  
+                  return (
+                    <div 
+                      key={track.tokenId} 
+                      className="flex items-center gap-3 cursor-pointer hover:bg-muted/50 p-2 rounded-md transition-colors group"
+                      onClick={() => {
+                        if (isCurrentTrack && isPlaying) {
+                          pauseTrack();
+                        } else {
+                          playTrack(audioTrack);
+                        }
+                      }}
+                    >
+                      <span className={`text-xs font-semibold w-4 ${
+                        index === 0 ? 'text-yellow-600' :
+                        index === 1 ? 'text-gray-600' :
+                        index === 2 ? 'text-orange-600' :
+                        'text-muted-foreground'
+                      }`}>
+                        {index + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{track.title}</p>
+                        <p className="text-xs text-muted-foreground truncate">{track.artist}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">{formatNumber(track.playCount)}</span>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="w-6 h-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isCurrentTrack && isPlaying) {
+                              pauseTrack();
+                            } else {
+                              playTrack(audioTrack);
+                            }
+                          }}
+                        >
+                          {isCurrentTrack && isPlaying ? (
+                            <Pause className="w-3 h-3" />
+                          ) : (
+                            <Play className="w-3 h-3" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            {/* Empty State */}
+            {!loadingTrending && trendingTracks.length === 0 && (
+              <div className="text-center py-6 text-muted-foreground text-sm">
+                No trending songs yet
+              </div>
+            )}
           </CardContent>
         </Card>
 

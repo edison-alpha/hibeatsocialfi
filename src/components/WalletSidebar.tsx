@@ -223,7 +223,7 @@ const WalletSidebar = ({ isOpen, onClose }: WalletSidebarProps) => {
         
         try {
           const { gql } = await import('@apollo/client');
-          const { apolloClient } = await import('@/services/subgraphService');
+          const { apolloClient } = await import('@/lib/apollo-client');
           
           // Try multiple sources for activities
           
@@ -403,58 +403,133 @@ const WalletSidebar = ({ isOpen, onClose }: WalletSidebarProps) => {
     }
 
     try {
+      // Pre-validation: Check balance before attempting transaction
+      if (balance && parseFloat(amount) > parseFloat(balance.formatted)) {
+        toast.error("Insufficient balance", {
+          description: `You only have ${parseFloat(balance.formatted).toFixed(4)} STT`,
+          duration: 5000,
+        });
+        return;
+      }
+
+      // Show initial loading toast
       toast.loading("Preparing transaction...", { id: "send-tx" });
 
       const txData = "0x";
       const amountWei = parseEther(amount);
 
-      console.log('💸 Sending tokens:', {
+      console.log('💸 Sending STT tokens:', {
         from: smartAccountAddress,
         to: address,
         amount: amount + ' STT',
-        amountWei: amountWei.toString()
+        amountWei: amountWei.toString(),
+        method: 'Native Transfer (Somnia Testnet)'
       });
 
       // 🔒 Financial transaction - requires manual approval
+      // Uses Sequence WaaS for gasless native token transfer
+      const startTime = Date.now();
+      
+      // Update toast to show sending status
+      toast.loading("Sending transaction...", { id: "send-tx" });
+      
       const txHash = await executeGaslessTransaction(
         address as `0x${string}`,
         txData,
         amountWei
       );
 
-      toast.dismiss("send-tx");
-      toast.success("Transaction sent!", {
-        description: `Sent ${amount} STT`,
-        action: {
-          label: "View",
-          onClick: () =>
-            window.open(
-              `https://shannon-explorer.somnia.network/tx/${txHash}`,
-              "_blank"
-            ),
-        },
+      const sendTime = Date.now() - startTime;
+      console.log('📤 Transaction sent:', txHash, `in ${sendTime}ms`);
+      
+      // 🔥 CRITICAL: Wait for blockchain confirmation
+      toast.loading("Confirming on blockchain...", { id: "send-tx" });
+      
+      if (!publicClient) {
+        throw new Error("Public client not available");
+      }
+      
+      // Wait for transaction receipt (Somnia has sub-second finality)
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash as `0x${string}`,
+        timeout: 10000, // 10s timeout (Somnia usually < 1s)
+        pollingInterval: 100, // Poll every 100ms
+        confirmations: 1
       });
+
+      const totalTime = Date.now() - startTime;
+      const confirmTime = totalTime - sendTime;
+      
+      // Dismiss loading toast
+      toast.dismiss("send-tx");
+      
+      // Check transaction status
+      if (receipt.status === 'success') {
+        // Show success toast with actual confirmation
+        toast.success("✅ Transaction Confirmed!", {
+          description: `Sent ${amount} STT to ${address.slice(0, 6)}...${address.slice(-4)} in ${(totalTime/1000).toFixed(1)}s`,
+          action: {
+            label: "View on Explorer",
+            onClick: () =>
+              window.open(
+                `https://shannon-explorer.somnia.network/tx/${txHash}`,
+                "_blank"
+              ),
+          },
+          duration: 8000,
+        });
+
+        console.log('✅ Send transaction confirmed:', {
+          txHash,
+          amount: amount + ' STT',
+          recipient: address,
+          blockNumber: receipt.blockNumber,
+          sendTime: `${sendTime}ms`,
+          confirmTime: `${confirmTime}ms`,
+          totalTime: `${totalTime}ms`,
+          status: receipt.status
+        });
+      } else if (receipt.status === 'reverted') {
+        throw new Error('Transaction reverted on blockchain. The transaction was rejected by the smart contract.');
+      } else {
+        throw new Error(`Transaction failed with status: ${receipt.status}`);
+      }
     } catch (error: any) {
       console.error("❌ Send failed:", error);
       toast.dismiss("send-tx");
       
-      // Better error messages
+      // Better error messages based on Somnia patterns
       let errorMessage = "Failed to send transaction";
+      let errorDescription = "";
       
-      if (error.message?.includes("Failed to check transaction fee")) {
-        errorMessage = "Network error: Unable to estimate gas. Please try again.";
-      } else if (error.message?.includes("insufficient funds")) {
-        errorMessage = "Insufficient balance for this transaction";
+      if (error.message?.includes("insufficient funds") || error.message?.includes("Insufficient balance")) {
+        errorMessage = "Insufficient Balance";
+        errorDescription = `You don't have enough STT to complete this transaction`;
       } else if (error.message?.includes("User rejected") || error.message?.includes("cancelled")) {
-        errorMessage = "Transaction cancelled";
-      } else if (error.message?.includes("timeout")) {
-        errorMessage = "Transaction timeout. Please try again.";
+        errorMessage = "Transaction Cancelled";
+        errorDescription = "You cancelled the transaction";
+        // Don't show error toast for user cancellation
+        toast.info(errorMessage, { description: errorDescription, duration: 3000 });
+        return;
+      } else if (error.message?.includes("timeout") || error.message?.includes("deadline exceeded")) {
+        errorMessage = "Transaction Timeout";
+        errorDescription = "Network is slow. Please try again.";
+      } else if (error.message?.includes("network") || error.message?.includes("fetch failed")) {
+        errorMessage = "Network Error";
+        errorDescription = "Unable to connect to Somnia network. Check your connection.";
+      } else if (error.message?.includes("duplicate") || error.message?.includes("already in progress")) {
+        errorMessage = "Transaction Already Sent";
+        errorDescription = "This transaction is already being processed";
+      } else if (error.message?.includes("invalid address")) {
+        errorMessage = "Invalid Address";
+        errorDescription = "The recipient address is not valid";
       } else if (error.message) {
         errorMessage = error.message;
       }
       
       toast.error(errorMessage, {
-        duration: 5000,
+        description: errorDescription || "Please try again or contact support",
+        duration: 6000,
       });
       
       throw error;

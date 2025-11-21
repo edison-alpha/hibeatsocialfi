@@ -89,41 +89,83 @@ export default function SendTokenModal({ isOpen, onClose, onSend }: SendTokenMod
     let finalAddress = recipient;
     if (!recipient.startsWith("0x")) {
       if (!resolvedAddress) {
-        toast.error("Username not found");
+        toast.error("Username not found", {
+          description: "Please enter a valid wallet address or username",
+        });
         return;
       }
       finalAddress = resolvedAddress;
     }
 
-    // Validate address
+    // Validate address format (Ethereum address)
     if (!finalAddress.startsWith("0x") || finalAddress.length !== 42) {
-      toast.error("Invalid address");
+      toast.error("Invalid wallet address", {
+        description: "Address must be 42 characters starting with 0x",
+      });
+      return;
+    }
+
+    // Validate address checksum (basic check)
+    if (!/^0x[a-fA-F0-9]{40}$/.test(finalAddress)) {
+      toast.error("Invalid address format", {
+        description: "Address contains invalid characters",
+      });
       return;
     }
 
     // Validate amount
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0) {
-      toast.error("Invalid amount");
+      toast.error("Invalid amount", {
+        description: "Amount must be greater than 0",
+      });
+      return;
+    }
+
+    // Check minimum amount (prevent dust transactions)
+    if (amountNum < 0.0001) {
+      toast.error("Amount too small", {
+        description: "Minimum amount is 0.0001 STT",
+      });
       return;
     }
 
     // Check balance
     if (balance && parseFloat(amount) > parseFloat(balance.formatted)) {
-      toast.error("Insufficient balance");
+      toast.error("Insufficient balance", {
+        description: `You only have ${parseFloat(balance.formatted).toFixed(4)} STT`,
+      });
       return;
     }
 
-    console.log('🚀 Starting send transaction:', { finalAddress, amount });
+    // Prevent sending to self
+    if (finalAddress.toLowerCase() === smartAccountAddress?.toLowerCase()) {
+      toast.error("Cannot send to yourself", {
+        description: "Please enter a different recipient address",
+      });
+      return;
+    }
+
+    console.log('🚀 Starting send transaction:', { 
+      finalAddress, 
+      amount,
+      recipient: recipient.startsWith("0x") ? "address" : "username"
+    });
     setIsLoading(true);
     
     try {
       await onSend(finalAddress, amount);
       console.log('✅ Send transaction completed successfully');
+      
+      // Reset form and close modal on success
+      setRecipient("");
+      setAmount("");
+      setResolvedAddress(null);
       onClose();
     } catch (error) {
       console.error('❌ Send transaction failed:', error);
       // Don't close modal on error so user can retry
+      // Error toast is already shown by parent component
     } finally {
       setIsLoading(false);
     }
@@ -221,12 +263,17 @@ export default function SendTokenModal({ isOpen, onClose, onSend }: SendTokenMod
 
           {/* Info Card */}
           <div className="bg-muted/20 border border-border/20 rounded-xl p-4 space-y-2">
-            <div className="text-xs text-muted-foreground">
-              <div className="flex items-center gap-2 mb-1">
+            <div className="text-xs text-muted-foreground space-y-2">
+              <div className="flex items-center gap-2">
                 <span className="text-green-500">⚡</span>
                 <span className="font-medium text-foreground">Gasless Transaction</span>
               </div>
-              <p>No fees required. Transaction will be processed instantly.</p>
+              <p>No fees required. Powered by Sequence Smart Wallet.</p>
+              <p className="text-[11px] text-muted-foreground/60">
+                • Sub-second finality on Somnia Network<br/>
+                • Secure native STT token transfer<br/>
+                • Transaction cannot be reversed
+              </p>
             </div>
           </div>
 
